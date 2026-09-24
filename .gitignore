@@ -1,0 +1,60 @@
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.env
+*.local
+*.backup
+
+# Database local storage
+.pglite_data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Dependencies
+node_modules/
+package-lock.json.bak
+
+# Build and distribution
+dist/
+build/
+out/
+.vite/
+*.tsbuildinfo
+
+# Personal images and media
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+!frontend/src/assets/**
+!backend/assets/**
+archive/
+Navaneeth/
+
+# Storage uploads
+storage/
+uploads/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and scratch
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+scratch/
+tmp/
+temp/
+coverage/
+.playwright/
+test-results/
