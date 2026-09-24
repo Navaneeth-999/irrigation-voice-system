@@ -18,6 +18,11 @@ import farmersRoutes from './modules/farmers/routes.js';
 import plotsRoutes from './modules/plots/routes.js';
 import referenceRoutes from './modules/reference/routes.js';
 import analyticsRoutes from './modules/analytics/routes.js';
+import seasonsRoutes from './modules/seasons/routes.js';
+import irrigationRoutes from './modules/irrigation/routes.js';
+import cropProgressRoutes from './modules/crop-progress/routes.js';
+import feedbackRoutes from './modules/feedback/routes.js';
+import actionItemsRoutes from './modules/action-items/routes.js';
 
 export function createApp(): express.Application {
   const app = express();
@@ -87,6 +92,11 @@ export function createApp(): express.Application {
   apiRouter.use('/plots', plotsRoutes);
   apiRouter.use('/reference', referenceRoutes);
   apiRouter.use('/analytics', analyticsRoutes);
+  apiRouter.use('/seasons', seasonsRoutes);
+  apiRouter.use('/irrigation', irrigationRoutes);
+  apiRouter.use('/crop-progress', cropProgressRoutes);
+  apiRouter.use('/feedback', feedbackRoutes);
+  apiRouter.use('/action-items', actionItemsRoutes);
 
   app.use('/api/v1', apiRouter);
 

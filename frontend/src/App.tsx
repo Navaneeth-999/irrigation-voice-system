@@ -12,9 +12,13 @@ import { FarmersPage } from './pages/FarmersPage.js';
 import { FarmerDetailPage } from './pages/FarmerDetailPage.js';
 import { PlotsPage } from './pages/PlotsPage.js';
 
+// Phase 2 Pages
+import { SeasonsPage } from './pages/SeasonsPage.js';
+import { SeasonDetailPage } from './pages/SeasonDetailPage.js';
+import { ActionQueuePage } from './pages/ActionQueuePage.js';
+
 // Subsequent Phase Pages (Placeholders)
 import {
-  SeasonsPage,
   WeatherPage,
   CallSimulatorPage,
   AnalyticsPage,
@@ -59,8 +63,12 @@ export const App: React.FC = () => {
               <Route path="farmers/:id" element={<FarmerDetailPage />} />
               <Route path="plots" element={<PlotsPage />} />
               
-              {/* Future Phase Placeholders */}
+              {/* Phase 2 Routes */}
               <Route path="seasons" element={<SeasonsPage />} />
+              <Route path="seasons/:id" element={<SeasonDetailPage />} />
+              <Route path="action-items" element={<ActionQueuePage />} />
+              
+              {/* Future Phase Placeholders */}
               <Route path="weather" element={<WeatherPage />} />
               <Route path="demo/call-simulator" element={<CallSimulatorPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />

@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   LogOut,
   Droplets,
+  AlertCircle,
 } from 'lucide-react';
 import { Badge } from '../ui/Badge.js';
 
@@ -31,6 +32,7 @@ export const AppLayout: React.FC = () => {
     { label: 'Farmers', path: '/farmers', icon: Users },
     { label: 'Plots & Water', path: '/plots', icon: MapPin },
     { label: 'Seasons', path: '/seasons', icon: Calendar },
+    { label: 'Action Queue', path: '/action-items', icon: AlertCircle },
     { label: 'Weather & Alerts', path: '/weather', icon: CloudSun },
     { label: 'Call Simulator', path: '/demo/call-simulator', icon: PhoneCall },
     { label: 'Water Analytics', path: '/analytics', icon: BarChart3 },

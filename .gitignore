@@ -35,8 +35,9 @@ archive/
 Navaneeth/
 
 # Storage uploads
-storage/
-uploads/
+/storage/
+/backend/storage/
+/uploads/
 
 # OS and Editor
 .DS_Store
