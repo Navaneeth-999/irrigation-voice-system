@@ -23,6 +23,7 @@ import irrigationRoutes from './modules/irrigation/routes.js';
 import cropProgressRoutes from './modules/crop-progress/routes.js';
 import feedbackRoutes from './modules/feedback/routes.js';
 import actionItemsRoutes from './modules/action-items/routes.js';
+import { telephonyRouter, twilioWebhookRouter } from './modules/telephony/routes.js';
 
 export function createApp(): express.Application {
   const app = express();
@@ -97,6 +98,8 @@ export function createApp(): express.Application {
   apiRouter.use('/crop-progress', cropProgressRoutes);
   apiRouter.use('/feedback', feedbackRoutes);
   apiRouter.use('/action-items', actionItemsRoutes);
+  apiRouter.use('/telephony', telephonyRouter);
+  apiRouter.use('/webhooks/twilio', twilioWebhookRouter);
 
   app.use('/api/v1', apiRouter);
 

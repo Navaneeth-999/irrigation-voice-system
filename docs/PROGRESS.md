@@ -1,8 +1,8 @@
 # Project Development Progress (`docs/PROGRESS.md`)
 
 ## Status Overview
-- Current Phase: **PHASE 1: Foundation (COMPLETED & VERIFIED)**
-- Next Phase: **PHASE 2: Seasons, Records, Feedback & Actions**
+- Current Phase: **PHASE 3: Call System, Telugu IVR, CallFlowEngine & Simulator (COMPLETED & VERIFIED)**
+- Next Phase: **PHASE 4: Weather, Alerts & Communication**
 - Last Updated: 2026-09-24
 
 ---
@@ -12,57 +12,60 @@
 | Phase | Description | Status | Verification & Deliverables |
 |---|---|---|---|
 | **Pre-Flight** | Environment inspection, secrets scan, safe archiving | **DONE** | Node 26, Git initialized, `.gitignore` strictly enforced, secrets safely isolated. |
-| **Phase 1** | Foundation, RBAC, Auth with CSRF, Farmers, Plots, Ref Data, Dashboard Shell | **DONE** | Migrations 001-003 applied, 19/19 automated tests passed, frontend built in 2.28s, committed. |
-| **Phase 2** | Seasons, Snapshots, Irrigation Records, Feedback, Action Queue | PENDING | Lifecycle states, frozen snapshots, volume calculation service. |
-| **Phase 3** | Call System, Telugu IVR, CallFlowEngine, Twilio Spike & Simulator | PENDING | Data-driven questionnaire, DTMF state machine, phone simulator. |
+| **Phase 1** | Foundation, RBAC, Auth with CSRF, Farmers, Plots, Ref Data, Dashboard Shell | **DONE** | Migrations 001-003 applied, 24/24 automated tests passed, frontend built cleanly. |
+| **Phase 2** | Seasons, Snapshots, Irrigation Records, Feedback, Action Queue | **DONE** | Migration 004 applied, frozen snapshot rule verified by mutation test, 18/18 tests passed. |
+| **Phase 3** | Call System, Telugu IVR, CallFlowEngine, Twilio Spike & Simulator | **DONE** | Migration 005 applied, 10 Telugu questions, pure state machine, audio gating, 18/18 tests passed (60/60 total). |
 | **Phase 4** | Weather Service, Open-Meteo Adapter, Alert Engine, SMS | PENDING | Village forecasts, IMD alert rules, deduplication, NotificationService. |
 | **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | PENDING | Kc stage tracking, water-use ratio, anomaly rules, Recharts dashboard. |
-| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | PENDING | PDFKit/Chromium with Noto Sans Telugu, public verification page. |
+| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | PENDING | PDFKit with Noto Sans Telugu, SHA-256 hash, public verification page. |
 | **Phase 7** | Hardening, Playwright E2E 22-Step Demo, Deployment Runbooks | PENDING | Full test suite, demo reset script, deployment guides for Vercel/Render. |
 
 ---
 
-### Phase 1 Deliverables & Verifications
+### Phase 3 Deliverables & Verifications
 
 #### Backend Deliverables:
-1. **Migrations Framework & Core Schema:**
-   - `001_access_and_system.sql`: `users`, `user_scopes`, `audit_logs` (with append-only trigger), `app_settings`.
-   - `002_reference_data.sql`: `villages`, `crops`, `crop_stages`, `crop_model_parameters`, `water_source_types`, `irrigation_method_types`, `offices`.
-   - `003_farmer_domain.sql`: `farmers`, `farmer_contacts`, `consents`, `plots`, `plot_water_sources`.
-   - **RLS Baseline:** Row Level Security enabled on all 16 tables with deny-by-default for anonymous access.
-2. **Database Engine Dual-Mode (`backend/src/db/index.ts`):**
-   - Connects to Supabase / remote PostgreSQL via `DATABASE_URL`.
-   - Zero-dependency local fallback via `@electric-sql/pglite` (persistent WASM PostgreSQL engine) ensuring full local operability without Docker.
-3. **Authentication & RBAC:**
-   - Secure HttpOnly cookie + JWT session.
-   - Password hashing via `bcryptjs` (salt rounds 12).
-   - Roles supported: `ADMIN`, `CSP_MEMBER`, `AGRI_PANCHAYAT`.
-   - Scoped village filtering for `AGRI_PANCHAYAT`.
-   - Phone number privacy masking (`+91 ****** 1234` for Panchayat role, unmasked with audit log for Admin/CSP).
-4. **Security & CSRF Protection:**
-   - Centralized `csrfProtection` middleware checking `X-Requested-With: XMLHttpRequest` or `X-CSRF-Token` on all mutating routes (`POST`, `PUT`, `PATCH`, `DELETE`).
-   - `helmet` security headers, strict CORS, rate-limiting, and `errorHandler` with request correlation IDs.
-5. **Farmer & Plot Domain Services:**
-   - CRUD for farmers, primary contact normalization via `libphonenumber-js` (E.164).
-   - Consents audit tracking (voice and SMS channels).
-   - Plot management with multiple water sources, pump HP, and discharge rate (L/hr).
-   - CSV bulk import with dry-run validation preview and row-level error reporting.
-6. **Storage Provider:**
-   - Interface `StorageProvider` with `LocalStorageAdapter` and `SupabaseStorageAdapter`.
+1. **Telephony & Voice Tables Migration (`005_telephony_voice_engine.sql`):**
+   - `call_question_sets`: Versioned, localized questionnaire configurations.
+   - `call_questions`: 10-step sequence with Telugu text, English meaning, expected digit constraints, repeat keys, and skip rules.
+   - `audio_prompts`: Prompts with agronomist certification workflow (`review_status`: `draft`, `recorded`, `reviewed_agronomist`, `approved`, `rejected`).
+   - `call_schedule`: Fortnightly queue pre-generated at season activation with $\pm 3$ days due windows.
+   - `call_attempts`: Provider call records with Call SID, timestamps, duration, and status.
+   - `call_responses`: Farmer DTMF digit captures with raw digits, parsed values, confidence scores, and skip flags.
+   - `provider_webhook_events`: Idempotency tracking table preventing duplicate webhook execution.
+2. **`CallFlowEngine` Pure State Machine (`modules/telephony/CallFlowEngine.ts`):**
+   - Pure, transport-neutral state engine independent of any network or telephony library.
+   - Full 10-question flow implemented: Intro, Rain, Irrigated, Count, Hours, Crop condition, Stage confirmation, Water problem, Crop problem, Callback requested, Goodbye.
+   - **Skip Branching Rule:** If Question 3 (`irrigated`) is `2` (No), automatically skips Question 4 (`irrigation_count`) and Question 5 (`hours`), marking them skipped with 0 hours, and jumps directly to Question 6 (`crop_condition`).
+   - **Opt-Out Rule:** 9 triggers opt-out **strictly** at Intro or Goodbye prompts. On Question 5 (`hours`), 9 represents 9 pump running hours and never terminates the call.
+   - **Repeat Key:** `*` immediately repeats the current question.
+   - **Retry & Timeout Handling:** Enforces maximum of 2 invalid or timeout retries before graceful termination.
+3. **Telephony Adapters Layer (`modules/telephony/adapters/`):**
+   - `TwilioAdapter`: Generates valid TwiML (`<Say language="te-IN">` and `<Gather>`), validates `X-Twilio-Signature`, and enforces prompt approval gating.
+   - `SimulatorAdapter`: Drives the browser-based interactive mobile dialpad.
+   - `MockTelephonyAdapter`: Supports headless unit testing.
+4. **Regulatory Audio Gating:**
+   - Unless `ALLOW_UNREVIEWED_PROMPTS=true` is explicitly set in development, any outbound Twilio call containing unapproved prompts is rejected with `AUDIO_PROMPT_NOT_APPROVED`.
+   - Agronomist prompt review API implemented: `GET /api/v1/telephony/prompts` and `POST /api/v1/telephony/prompts/:promptCode/review`.
+5. **Early Twilio Spike Script (`scripts/twilio-spike.ts`):**
+   - Verifies Twilio account SID, auth token, caller ID, and verified recipient number.
+   - Honestly reports missing environment variables without mock substitution.
+   - Spins up local webhook server and ngrok tunnel to execute real outbound calls.
+6. **Fortnightly Automated Scheduling & Concurrency Queue:**
+   - Season activation automatically schedules fortnightly calls across the entire season duration.
+   - Queue processor uses `FOR UPDATE SKIP LOCKED` inside transactions, safe from multi-worker race conditions.
 
 #### Frontend Deliverables:
-1. **Branded Agricultural Theme:**
-   - Built on Tailwind CSS with forest greens, soil/amber accents, and water blue.
-   - Noto Sans Telugu typography support integrated for bilingual clarity.
-2. **Navigation & Application Shell (`AppLayout`):**
-   - Sidebar navigation, demo banner, user role badge, and session logout.
-   - Protected routes with role-based restrictions.
-3. **Screens Implemented:**
-   - `/login`: Branded login form with pre-filled local development credentials.
-   - `/dashboard`: Live aggregated KPIs (farmers, active status, cultivated acres, water metrics) and recent farmers list.
-   - `/farmers`: Searchable, filterable directory by village and status; Register Farmer modal; CSV bulk import modal with dry-run preview.
-   - `/farmers/:id`: Comprehensive tabbed profile (Personal, Contacts, Plots, Consents, Audit history) with inline Add Plot modal.
-   - `/plots`: Global parcels view showing area, soil type, tenure, and water source breakdown with pump specs.
+1. **Interactive Mobile Phone Call Simulator (`/demo/call-simulator`):**
+   - Realistic mobile phone device with audio waves indicator, time display, and call duration timer.
+   - Full 12-button keypad (`0-9`, `*`, `#`) with active DTMF dispatching.
+   - Dual-language display: Large Telugu voice prompt with English translation underneath.
+   - Real-time conversation transcript and DTMF log.
+   - Live inspection cards detailing the automatically generated `farmer_feedback`, `irrigation_records`, and `action_items`.
+   - Quick navigation links directly into Season Details and Action Queue.
+2. **Audio Prompts & Agronomist Review Console:**
+   - Review tab showing all 10 questions and system prompts with current review status.
+   - Modal interface allowing agronomists and admins to certify prompts with review notes.
 
 ---
 
@@ -70,53 +73,31 @@
 
 | Component | Current State | Notes |
 |---|---|---|
-| **Database** | Real (PGlite local WASM / PostgreSQL Supabase) | Real PostgreSQL syntax, migrations, JSONB, and triggers in both modes. |
-| **Authentication** | Real (bcryptjs + JWT HttpOnly Cookie + CSRF protection) | Fully implemented server-side. |
-| **Farmers & Plots** | Real | Stored in PostgreSQL/PGlite tables with foreign keys and constraints. |
-| **Storage** | Local disk adapter active / Supabase Storage adapter configured | Audio, PDFs, and voice notes stored with proper access tiers. |
-| **Open-Meteo Weather** | Verified live network access | Real live API tested for AP coordinates (16.5, 80.6). Scheduled for Phase 4. |
-| **Telephony / Twilio** | Mock Adapter active / Twilio Adapter configured | Early live spike scheduled for Phase 3. |
-| **SMS** | Mock Adapter active | Indian DLT compliance documented; mock for college demo. |
+| **Database** | Real (PGlite local WASM / PostgreSQL Supabase) | Standard PostgreSQL syntax, migrations, JSONB, triggers, and row locking. |
+| **Authentication & CSRF** | Real (bcryptjs + JWT HttpOnly Cookie + CSRF protection) | Fully implemented server-side with forced first-login password change. |
+| **Farmers, Plots & Seasons** | Real | Stored in PostgreSQL/PGlite tables with frozen snapshot rules. |
+| **CallFlowEngine & State Machine** | Real | Pure deterministic state machine covering 10 questions and skip rules. |
+| **Browser Phone Simulator** | Real | Full interactive keypad with real-time feedback and downstream persistence. |
+| **Twilio Live Telephony** | Real Adapter + Spike Ready | Real adapter with TwiML and signature verification; runnable via `npm run twilio:spike`. |
+| **Weather & Alerts** | Verified live network access | Scheduled for Phase 4. |
 
 ---
 
-### How to Run and Test Phase 1
+### How to Run and Test Phase 3
 
-#### 1. Backend:
+#### 1. Backend Automated Tests (60/60 tests passing):
 ```bash
 cd backend
-
-# Run typecheck
-npm run typecheck
-
-# Run automated tests (19/19 tests)
 npm test
-
-# Run migrations and seed reference data manually if needed
-npm run migrate
-npm run seed:reference
-npm run create-admin
-
-# Start backend development server
-npm run dev
-# Server boots on http://localhost:4000
-# Health check: http://localhost:4000/healthz
-# Readiness check: http://localhost:4000/readyz
 ```
 
-#### 2. Frontend:
+#### 2. Twilio Spike Pre-Flight Check:
 ```bash
-cd frontend
-
-# Build frontend
-npm run build
-
-# Start frontend development server
-npm run dev
-# Frontend boots on http://localhost:5173
+npm run twilio:spike --prefix backend
 ```
 
-#### 3. Default Credentials:
-- **Email:** `admin@csp-irrigation.org`
-- **Password:** `ChangeMeAdmin123!`
-- **Role:** `ADMIN`
+#### 3. Interactive Browser Call Simulator:
+1. Start backend: `npm run dev --prefix backend` (port 4000)
+2. Start frontend: `npm run dev --prefix frontend` (port 5173)
+3. Open browser at `http://localhost:5173/demo/call-simulator`
+4. Select active season, click "Start Telugu Voice Call", and use the dialpad to step through questions.

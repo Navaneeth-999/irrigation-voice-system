@@ -17,10 +17,12 @@ import { SeasonsPage } from './pages/SeasonsPage.js';
 import { SeasonDetailPage } from './pages/SeasonDetailPage.js';
 import { ActionQueuePage } from './pages/ActionQueuePage.js';
 
+// Phase 3 Pages
+import { CallSimulatorPage } from './pages/CallSimulatorPage.js';
+
 // Subsequent Phase Pages (Placeholders)
 import {
   WeatherPage,
-  CallSimulatorPage,
   AnalyticsPage,
   CertificatesPage,
   SettingsPage,

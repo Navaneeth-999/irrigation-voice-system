@@ -1,4 +1,5 @@
 import { db, withTransaction, closeDatabase } from '../db/index.js';
+import { seedQuestionnaire } from './seed-prompts.js';
 
 export async function seedReferenceData() {
   console.log('🌱 Seeding reference data...');
@@ -183,6 +184,9 @@ export async function seedReferenceData() {
           description = EXCLUDED.description
       `, [s.key, JSON.stringify(s.value), s.desc]);
     }
+
+    // 8. Questionnaire and Audio Prompts
+    await seedQuestionnaire(tx);
   });
 
   console.log('✅ Reference data seeded successfully.');

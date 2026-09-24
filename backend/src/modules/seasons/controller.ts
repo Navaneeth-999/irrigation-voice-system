@@ -4,6 +4,7 @@ import { AppError } from '../../middleware/errorHandler.js';
 import { recordAudit } from '../../middleware/audit.js';
 import { getScopedVillageFilter } from '../../middleware/auth.js';
 import { createSeasonSchema, updateSeasonSchema, completeSeasonSchema } from './schemas.js';
+import { TelephonyService } from '../telephony/service.js';
 
 export async function listSeasons(req: Request, res: Response): Promise<void> {
   const { farmer_id, status, crop_id, season_year } = req.query;
@@ -248,6 +249,9 @@ export async function activateSeason(req: Request, res: Response): Promise<void>
     WHERE id = $1
     RETURNING *
   `, [id]);
+
+  // Generate automated fortnightly call schedule for this season
+  await TelephonyService.scheduleCallsForSeason(id);
 
   await recordAudit({
     userId: req.user?.id,
