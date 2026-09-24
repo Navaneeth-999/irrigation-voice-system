@@ -231,6 +231,11 @@ export async function updateFarmer(req: Request, res: Response): Promise<void> {
   }
   const before = existingRes.rows[0];
 
+  const scopedVillages = getScopedVillageFilter(req.user);
+  if (scopedVillages !== null && !scopedVillages.includes(before.village_id)) {
+    throw new AppError('Forbidden: You do not have permission to modify farmers in this village.', 403, 'FORBIDDEN');
+  }
+
   const fullName = updates.full_name ?? before.full_name;
   const villageId = updates.village_id ?? before.village_id;
   const address = updates.address !== undefined ? updates.address : before.address;

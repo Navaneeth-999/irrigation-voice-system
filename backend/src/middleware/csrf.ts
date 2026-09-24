@@ -12,8 +12,7 @@ export function csrfProtection(req: Request, _res: Response, next: NextFunction)
     return next();
   }
 
-  // Exempt public verification or auth endpoints that do not yet have a session if needed,
-  // but requiring X-Requested-With on all frontend calls is standard and protects against CSRF
+  // Enforce custom CSRF header check on all mutating requests
   const requestedWith = req.headers['x-requested-with'];
   const csrfToken = req.headers['x-csrf-token'];
 
@@ -21,8 +20,8 @@ export function csrfProtection(req: Request, _res: Response, next: NextFunction)
     return next();
   }
 
-  // In test environment, allow if specifically bypassed
-  if (process.env.NODE_ENV === 'test' && !req.headers['x-enforce-csrf']) {
+  // Only allowed to skip in test environment if explicitly flagged
+  if (process.env.NODE_ENV === 'test' && req.headers['x-skip-csrf-test'] === 'true') {
     return next();
   }
 

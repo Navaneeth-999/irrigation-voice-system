@@ -5,13 +5,13 @@ import { config } from '../../config/index.js';
 import { generateToken } from '../../middleware/auth.js';
 import { AppError } from '../../middleware/errorHandler.js';
 import { recordAudit } from '../../middleware/audit.js';
-import { loginSchema } from './schemas.js';
+import { loginSchema, changePasswordSchema } from './schemas.js';
 
 export async function login(req: Request, res: Response): Promise<void> {
   const { email, password } = loginSchema.parse(req.body);
 
   const userRes = await db.query(`
-    SELECT id, name, email, password_hash, role, is_active, failed_login_count, locked_until
+    SELECT id, name, email, password_hash, role, is_active, failed_login_count, locked_until, must_change_password
     FROM users
     WHERE email = $1
   `, [email.toLowerCase().trim()]);
@@ -73,7 +73,7 @@ export async function login(req: Request, res: Response): Promise<void> {
     role: user.role,
   });
 
-  // Set secure HttpOnly cookie
+  // Set secure HttpOnly cookie - the sole session carrier
   res.cookie('token', token, {
     httpOnly: true,
     secure: config.COOKIE_SECURE,
@@ -92,6 +92,7 @@ export async function login(req: Request, res: Response): Promise<void> {
     req,
   });
 
+  // Never expose token in JSON body; cookie is the sole session carrier
   res.json({
     data: {
       user: {
@@ -99,8 +100,48 @@ export async function login(req: Request, res: Response): Promise<void> {
         name: user.name,
         email: user.email,
         role: user.role,
+        must_change_password: Boolean(user.must_change_password),
       },
-      token, // also return in JSON for mobile/dev convenience
+    },
+  });
+}
+
+export async function changePassword(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    throw new AppError('Authentication required', 401, 'UNAUTHORIZED');
+  }
+
+  const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+
+  const userRes = await db.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+  if (userRes.rows.length === 0) {
+    throw new AppError('User not found', 404, 'NOT_FOUND');
+  }
+
+  const isMatch = await bcrypt.compare(currentPassword, userRes.rows[0].password_hash);
+  if (!isMatch) {
+    throw new AppError('Current password does not match.', 400, 'PASSWORD_MISMATCH');
+  }
+
+  const newHash = await bcrypt.hash(newPassword, 12);
+
+  await db.query(`
+    UPDATE users
+    SET password_hash = $1, must_change_password = false, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
+  `, [newHash, req.user.id]);
+
+  await recordAudit({
+    userId: req.user.id,
+    action: 'PASSWORD_CHANGED',
+    entityType: 'users',
+    entityId: req.user.id,
+    req,
+  });
+
+  res.json({
+    data: {
+      message: 'Password changed successfully.',
     },
   });
 }
@@ -135,9 +176,15 @@ export async function getCurrentUser(req: Request, res: Response): Promise<void>
     throw new AppError('Not authenticated', 401, 'UNAUTHORIZED');
   }
 
+  const userRes = await db.query('SELECT must_change_password FROM users WHERE id = $1', [req.user.id]);
+  const mustChange = userRes.rows[0]?.must_change_password || false;
+
   res.json({
     data: {
-      user: req.user,
+      user: {
+        ...req.user,
+        must_change_password: Boolean(mustChange),
+      },
     },
   });
 }

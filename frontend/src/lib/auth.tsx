@@ -6,6 +6,7 @@ export interface User {
   name: string;
   email: string;
   role: 'ADMIN' | 'CSP_MEMBER' | 'AGRI_PANCHAYAT' | 'FARMER';
+  must_change_password?: boolean;
   scopes?: { scope_type: string; scope_value: string }[];
 }
 
