@@ -6,9 +6,9 @@ import { db } from '../../../db/index.js';
 export class TwilioAdapter implements ITelephonyAdapter {
   providerName: TelephonyProvider = 'twilio';
   private client: twilio.Twilio | null = null;
-  private accountSid: string;
-  private authToken: string;
-  private fromNumber: string;
+  public accountSid: string;
+  public authToken: string;
+  public fromNumber: string;
 
   constructor() {
     this.accountSid = process.env.TWILIO_ACCOUNT_SID || '';
@@ -32,20 +32,20 @@ export class TwilioAdapter implements ITelephonyAdapter {
 
     const placeholders = promptCodes.map((_, i) => `$${i + 1}`).join(',');
     const res = await db.query(
-      `SELECT prompt_code, review_status FROM audio_prompts WHERE prompt_code IN (${placeholders})`,
+      `SELECT prompt_code, review_status, audio_url FROM audio_prompts WHERE prompt_code IN (${placeholders})`,
       promptCodes
     );
 
-    const statusMap = new Map<string, string>();
+    const statusMap = new Map<string, { status: string; audioUrl?: string }>();
     for (const r of res.rows) {
-      statusMap.set(r.prompt_code, r.review_status);
+      statusMap.set(r.prompt_code, { status: r.review_status, audioUrl: r.audio_url });
     }
 
     for (const code of promptCodes) {
-      const status = statusMap.get(code);
-      if (!status || status !== 'approved') {
+      const entry = statusMap.get(code);
+      if (!entry || entry.status !== 'approved') {
         throw new Error(
-          `AUDIO_PROMPT_NOT_APPROVED: Prompt '${code}' has status '${status || 'missing'}'. Real calls require 'approved' status.`
+          `AUDIO_PROMPT_NOT_APPROVED: Prompt '${code}' has status '${entry?.status || 'missing'}'. Real calls require 'approved' status.`
         );
       }
     }
@@ -82,13 +82,45 @@ export class TwilioAdapter implements ITelephonyAdapter {
     };
   }
 
-  generateResponse(action: StepAction, callbackUrl: string): string {
+  /**
+   * Generates TwiML for an action.
+   * PRODUCTION RULE: Production calls must use <Play> with approved audio;
+   * <Say> is strictly a development-only fallback.
+   */
+  generateResponse(action: StepAction, callbackUrl: string, audioUrl?: string): string {
     const VoiceResponse = twilio.twiml.VoiceResponse;
     const response = new VoiceResponse();
+    const isProduction = process.env.NODE_ENV === 'production' && process.env.ALLOW_UNREVIEWED_PROMPTS !== 'true';
+
+    // Helper to render prompt sound (Play or Say)
+    const renderPrompt = (container: any) => {
+      if (audioUrl) {
+        container.play(audioUrl);
+      } else if (isProduction) {
+        throw new Error(
+          `AUDIO_PROMPT_NOT_RECORDED: Production calls require hosted audio files with <Play>. Prompt: ${action.promptCode}`
+        );
+      } else {
+        container.say({ language: 'te-IN' as any }, action.teluguText);
+      }
+    };
 
     if (action.type === 'TERMINATE') {
-      response.say({ language: 'te-IN' as any }, action.teluguText);
+      renderPrompt(response);
       response.hangup();
+      return response.toString();
+    }
+
+    // Optional 30-Second Voice Recording Question
+    if (action.expectedInputType === 'voice_recording') {
+      renderPrompt(response);
+      response.record({
+        action: `${callbackUrl}&voice_recording=true`,
+        maxLength: 30,
+        finishOnKey: '#',
+        playBeep: true,
+      });
+      response.redirect({ method: 'POST' }, `${callbackUrl}&timeout=true`);
       return response.toString();
     }
 
@@ -101,16 +133,19 @@ export class TwilioAdapter implements ITelephonyAdapter {
       timeout: action.timeoutSeconds,
     });
 
-    gather.say({ language: 'te-IN' as any }, action.teluguText);
+    renderPrompt(gather);
 
     // If no input gathered within timeout window, redirect to timeout handler
-    response.redirect({ method: 'POST' }, `${callbackUrl}?timeout=true`);
+    response.redirect({ method: 'POST' }, `${callbackUrl}&timeout=true`);
 
     return response.toString();
   }
 
+  /**
+   * Validates Twilio cryptographic signature against request URL and body parameters.
+   */
   verifySignature(req: any): boolean {
-    if (process.env.NODE_ENV === 'test') {
+    if (process.env.NODE_ENV === 'test' && req.headers['x-skip-signature-test'] === 'true') {
       return true;
     }
 
@@ -123,8 +158,11 @@ export class TwilioAdapter implements ITelephonyAdapter {
     const host = req.headers['x-forwarded-host'] || req.get('host');
     const fullUrl = `${protocol}://${host}${req.originalUrl}`;
 
+    const authToken = this.authToken || process.env.TWILIO_AUTH_TOKEN || '';
+    if (!authToken) return false;
+
     return twilio.validateRequest(
-      this.authToken,
+      authToken,
       signature,
       fullUrl,
       req.body || {}

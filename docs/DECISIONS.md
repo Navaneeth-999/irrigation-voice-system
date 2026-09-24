@@ -79,3 +79,17 @@ This living document records significant technical and architectural decisions, 
   2. When a season is activated, fortnightly call schedules are pre-generated in `call_schedule` table with due windows of $\pm 3$ days.
   3. Water volumes derived from farmer-reported pump hours $\times$ discharge rate are strictly categorized with `measurement_type = 'estimated'` and provenance `raw_unit = 'pump_hours'`, `calculation_method = 'pump_hours_x_discharge'`. They are never mislabeled as direct physical measurements.
 - **Reason:** Reflects real agronomic intervals in Andhra Pradesh, prevents misleading claims about sensor-level precision, and maintains scientific integrity for the CSP community service evaluation.
+
+---
+
+## DECISION-010: 1-Based Digit Mappings, Total Hours Semantics & Dispatch Gating
+- **Context:** User feedback and Phase 3 refinements required aligning digit options with approved design (1-based, no 0), clarifying pump hours as total hours for the period, supporting stage branching and voice notes, enforcing regulatory dispatch rules, and tracking scheduler locking.
+- **Decision:**
+  1. **Single Source of Truth (`QuestionnaireConfig.ts`):** Questionnaire options and prompt text are generated dynamically from a unified configuration. All options strictly use 1-based keypad digits (e.g. rain: 1=none, 2=light, 3=moderate, 4=heavy; water_problem: 1=none, 2=shortage, 3=pump_power, 4=source_unavailable; crop_problem: 1=none, 2=pests_disease, 3=yellowing_drying, 4=other).
+  2. **Total Running Hours Semantics:** "hours" (Question 5) is defined as the **total pump running hours** for the entire fortnightly period (1-3 digits + #, up to 999). Irrigation volume is calculated directly as $\text{Volume (Litres)} = \text{total\_hours} \times \text{discharge\_rate\_lph}$.
+  3. **Stage Branching & Voice Note:** Stage confirmation (Question 7) offers "1 = confirmed, 2 = different". Selecting 2 branches to sub-step 72 displaying crop-specific stages. Question 11 introduces an optional 30-second voice note recording (`<Record>`) with digit 1 to skip.
+  4. **Dispatch Gating & Consecutive Failure Actions:** The call dispatch worker (`processDueCallSchedule`) verifies voice communication consent in `consents`, enforces a daily cap of 1 call attempt per farmer per day, restricts calls to 09:00–18:00 IST, and retries up to 3 attempts. When attempts are exhausted, it logs an SMS fallback. Two consecutive unreached cycles automatically generate a `repeated_missed_calls` action item for field officer follow-up.
+  5. **Opt-Out Action:** Pressing 9 at Intro or Goodbye records `status = 'withdrawn'` in `consents`, cancels future pending call schedules (`status = 'cancelled'`), and sets the current schedule to `opted_out`.
+  6. **Interactive Simulator Restriction:** Simulator calls are strictly restricted to demo farmers (`data_origin = 'demo'`). Real farmer records return HTTP 403 `SIMULATOR_DEMO_ONLY`.
+  7. **Scheduler Locking on Real PostgreSQL:** Dual-mode database layer runs all unit tests in local PGlite. Scheduler concurrency locking verification against real PostgreSQL is held open pending the user's Supabase dev `DIRECT_DATABASE_URL`.
+

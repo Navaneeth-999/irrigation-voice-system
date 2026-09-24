@@ -21,14 +21,54 @@ export class TelephonyController {
       return;
     }
 
+    let seasonId = parsed.data.seasonId;
+    let farmerId = parsed.data.farmerId;
+    const scheduleId = parsed.data.scheduleId;
+
+    if (scheduleId && (!seasonId || !farmerId)) {
+      const schRes = await db.query(
+        `SELECT season_id, farmer_id FROM call_schedule WHERE id = $1`,
+        [scheduleId]
+      );
+      if (schRes.rows.length > 0) {
+        seasonId = seasonId || schRes.rows[0].season_id;
+        farmerId = farmerId || schRes.rows[0].farmer_id;
+      }
+    }
+
+    // Safety restriction: Simulator calls are strictly restricted to demo farmers (data_origin = 'demo')
+    let isDemo = false;
+    if (farmerId) {
+      const fRes = await db.query(`SELECT data_origin FROM farmers WHERE id = $1`, [farmerId]);
+      if (fRes.rows.length > 0 && fRes.rows[0].data_origin === 'demo') {
+        isDemo = true;
+      }
+    } else if (seasonId) {
+      const sRes = await db.query(
+        `SELECT f.data_origin FROM seasons s JOIN farmers f ON s.farmer_id = f.id WHERE s.id = $1`,
+        [seasonId]
+      );
+      if (sRes.rows.length > 0 && sRes.rows[0].data_origin === 'demo') {
+        isDemo = true;
+      }
+    }
+
+    if (!isDemo && (farmerId || seasonId || scheduleId)) {
+      res.status(403).json({
+        error: 'SIMULATOR_DEMO_ONLY',
+        message: 'Interactive simulator can only be run for demo farmers (data_origin = demo).',
+      });
+      return;
+    }
+
     const sessionId = `sim-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const result = await TelephonyService.startSession({
       sessionId,
       phoneE164: parsed.data.phoneE164,
       provider: 'simulator',
-      callScheduleId: parsed.data.scheduleId,
-      seasonId: parsed.data.seasonId,
-      farmerId: parsed.data.farmerId,
+      callScheduleId: scheduleId,
+      seasonId,
+      farmerId,
     });
 
     res.json({
@@ -155,6 +195,14 @@ export class TelephonyController {
           `UPDATE call_attempts SET status = $1, ended_at = NOW() WHERE provider_call_sid = $2`,
           [callStatus === 'no-answer' ? 'no_answer' : callStatus, callSid]
         );
+
+        const attemptRes = await db.query(
+          `SELECT call_schedule_id FROM call_attempts WHERE provider_call_sid = $1`,
+          [callSid]
+        );
+        if (attemptRes.rows[0]?.call_schedule_id) {
+          await TelephonyService.handleScheduleFailure(attemptRes.rows[0].call_schedule_id, callStatus);
+        }
       }
     }
 

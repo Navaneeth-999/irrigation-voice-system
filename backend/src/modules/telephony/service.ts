@@ -275,22 +275,38 @@ export class TelephonyService {
     if (!state.callScheduleId) return;
 
     if (state.isOptedOut) {
-      await db.query(
-        `UPDATE call_schedule
-         SET status = 'opted_out', updated_at = NOW()
-         WHERE id = $1`,
-        [state.callScheduleId]
-      );
+      if (state.farmerId) {
+        // Record withdrawn consent in consents audit table
+        await db.query(
+          `INSERT INTO consents (farmer_id, channel, status, method, note)
+           VALUES ($1, 'voice', 'withdrawn', 'ivr', 'Farmer pressed 9 to opt out')`,
+          [state.farmerId]
+        );
+      }
+      if (state.seasonId) {
+        // Cancel future pending call schedule entries for this season
+        await db.query(
+          `UPDATE call_schedule
+           SET status = 'cancelled', updated_at = NOW()
+           WHERE season_id = $1 AND status = 'scheduled'`,
+          [state.seasonId]
+        );
+      }
+      if (state.callScheduleId) {
+        await db.query(
+          `UPDATE call_schedule
+           SET status = 'opted_out', updated_at = NOW()
+           WHERE id = $1`,
+          [state.callScheduleId]
+        );
+      }
       return;
     }
 
     if (!state.isCompleted) {
-      await db.query(
-        `UPDATE call_schedule
-         SET status = 'failed', updated_at = NOW()
-         WHERE id = $1`,
-        [state.callScheduleId]
-      );
+      if (state.callScheduleId) {
+        await this.handleScheduleFailure(state.callScheduleId, 'call_incomplete');
+      }
       return;
     }
 
@@ -362,19 +378,34 @@ export class TelephonyService {
       else if (payload.cropProblem === 'yellowing_drying') mappedCropProblem = 'yellowing_drying';
       else if (payload.cropProblem === 'other') mappedCropProblem = 'other';
 
+      // User Requirement 2: "hours" means TOTAL pump running hours for the period!
       const totalPumpHours = payload.irrigated
-        ? (payload.irrigationCount || 1) * (payload.hoursPerIrrigation || 1)
+        ? Number(payload.totalPumpHours ?? payload.hoursPerIrrigation ?? 0)
         : 0;
+
+      let reportedStageId: string | null = null;
+      if (!payload.stageConfirmed && payload.reportedStage) {
+        const stageRes = await tx.query(
+          `SELECT cs.id FROM crop_stages cs
+           JOIN seasons s ON s.crop_id = cs.crop_id
+           WHERE s.id = $1 AND (cs.name ILIKE $2 OR cs.name_te ILIKE $2)
+           ORDER BY cs.stage_order ASC LIMIT 1`,
+          [seasonId, `%${payload.reportedStage}%`]
+        );
+        if (stageRes.rows.length > 0) {
+          reportedStageId = stageRes.rows[0].id;
+        }
+      }
 
       // 2. Insert farmer_feedback record
       const fbRes = await tx.query(
         `INSERT INTO farmer_feedback (
           season_id, cycle_number, period_start, period_end,
           rainfall_class, irrigated, irrigation_count, pump_hours,
-          crop_condition, stage_confirmed, water_problem, crop_problem,
-          callback_requested, source, is_simulated
+          crop_condition, stage_confirmed, reported_stage_id, water_problem, crop_problem,
+          callback_requested, voice_note_path, source, is_simulated
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING id`,
         [
           seasonId,
@@ -387,9 +418,11 @@ export class TelephonyService {
           totalPumpHours,
           payload.cropCondition,
           payload.stageConfirmed,
+          reportedStageId,
           mappedWaterProblem,
           mappedCropProblem,
           payload.callbackRequested,
+          payload.voiceNoteUrl || null,
           payload.source,
           payload.isSimulated,
         ]
@@ -533,17 +566,40 @@ export class TelephonyService {
     let dueRows: any[] = [];
     await withTransaction(async (tx) => {
       const dueRes = await tx.query(
-        `SELECT id, season_id, farmer_id, phone_e164, cycle_number, attempt_count, max_attempts
-         FROM call_schedule
-         WHERE status = 'scheduled'
-           AND scheduled_date <= CURRENT_DATE
-           AND attempt_count < max_attempts
-         ORDER BY scheduled_date ASC
+        `SELECT cs.id, cs.season_id, cs.farmer_id, cs.phone_e164, cs.cycle_number, cs.attempt_count, cs.max_attempts
+         FROM call_schedule cs
+         WHERE cs.status = 'scheduled'
+           AND cs.scheduled_date <= CURRENT_DATE
+           AND cs.attempt_count < cs.max_attempts
+           -- Consent check: Farmer must not have active withdrawn consent for voice
+           AND NOT EXISTS (
+             SELECT 1 FROM consents c
+             WHERE c.farmer_id = cs.farmer_id
+               AND c.channel = 'voice'
+               AND c.status = 'withdrawn'
+           )
+           -- Daily cap check: Max 1 call attempt per farmer per day
+           AND NOT EXISTS (
+             SELECT 1 FROM call_attempts ca
+             JOIN call_schedule cs2 ON ca.call_schedule_id = cs2.id
+             WHERE cs2.farmer_id = cs.farmer_id
+               AND ca.started_at >= CURRENT_DATE
+           )
+         ORDER BY cs.scheduled_date ASC
          LIMIT $1
          FOR UPDATE SKIP LOCKED`,
         [limit]
       );
       dueRows = dueRes.rows;
+
+      for (const row of dueRows) {
+        await tx.query(
+          `UPDATE call_schedule
+           SET status = 'in_progress', attempt_count = attempt_count + 1, last_attempt_at = NOW(), updated_at = NOW()
+           WHERE id = $1`,
+          [row.id]
+        );
+      }
     });
 
     const dispatched: any[] = [];
@@ -577,6 +633,69 @@ export class TelephonyService {
     }
 
     return { processedCount: dispatched.length, callsDispatched: dispatched };
+  }
+
+  /**
+   * Handles failure of a scheduled call attempt:
+   * - Checks attempt limit against max_attempts
+   * - If exceeded: marks status = 'failed', logs fallback SMS, and checks if previous cycle was also failed (triggering repeated_missed_calls)
+   * - If retry remains: sets status back to 'scheduled'
+   */
+  static async handleScheduleFailure(scheduleId: string, reason: string = 'not_reached'): Promise<void> {
+    const schRes = await db.query(
+      `SELECT cs.id, cs.season_id, cs.farmer_id, cs.cycle_number, cs.attempt_count, cs.max_attempts
+       FROM call_schedule cs
+       WHERE cs.id = $1`,
+      [scheduleId]
+    );
+
+    if (schRes.rows.length === 0) return;
+    const sch = schRes.rows[0];
+
+    if (sch.attempt_count >= sch.max_attempts) {
+      // Reached maximum attempts: mark schedule as failed
+      await db.query(
+        `UPDATE call_schedule SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+        [scheduleId]
+      );
+
+      // Log fallback SMS
+      console.log(`[Telephony] Fallback SMS logged for failed call cycle ${sch.cycle_number} on season ${sch.season_id} (farmer: ${sch.farmer_id}, reason: ${reason}).`);
+
+      // Check if previous cycle was also failed (two consecutive not_reached cycles)
+      if (sch.cycle_number > 1) {
+        const prevRes = await db.query(
+          `SELECT status FROM call_schedule WHERE season_id = $1 AND cycle_number = $2`,
+          [sch.season_id, sch.cycle_number - 1]
+        );
+        if (prevRes.rows.length > 0 && prevRes.rows[0].status === 'failed') {
+          // Two consecutive failures! Trigger repeated_missed_calls action item
+          const existingItem = await db.query(
+            `SELECT id FROM action_items WHERE season_id = $1 AND type = 'repeated_missed_calls' AND status IN ('open', 'assigned', 'in_progress')`,
+            [sch.season_id]
+          );
+          if (existingItem.rows.length === 0) {
+            await db.query(
+              `INSERT INTO action_items (
+                source, farmer_id, season_id, type, status, priority, referral_note
+              )
+              VALUES ('call', $1, $2, 'repeated_missed_calls', 'open', 'high', $3)`,
+              [
+                sch.farmer_id,
+                sch.season_id,
+                `Farmer was unreachable across two consecutive call cycles (cycles ${sch.cycle_number - 1} and ${sch.cycle_number}). Fallback SMS logged.`,
+              ]
+            );
+          }
+        }
+      }
+    } else {
+      // Still has remaining attempts: revert status to 'scheduled' for retry
+      await db.query(
+        `UPDATE call_schedule SET status = 'scheduled', updated_at = NOW() WHERE id = $1`,
+        [scheduleId]
+      );
+    }
   }
 
   /**

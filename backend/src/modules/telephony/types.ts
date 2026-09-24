@@ -55,7 +55,7 @@ export interface StepAction {
   promptCode: string;
   teluguText: string;
   englishText: string;
-  expectedInputType: 'single_digit' | 'multi_digit' | 'none';
+  expectedInputType: 'single_digit' | 'multi_digit' | 'voice_recording' | 'none';
   validDigits?: string;
   minDigits: number;
   maxDigits: number;
@@ -73,10 +73,14 @@ export interface CallCompletionPayload {
   rainfallCategory: 'none' | 'light' | 'moderate' | 'heavy';
   irrigated: boolean;
   irrigationCount?: number;
-  hoursPerIrrigation?: number;
+  totalPumpHours?: number;
+  hoursPerIrrigation?: number; // legacy alias
   cropCondition: 'good' | 'average' | 'poor';
   stageConfirmed: boolean;
+  reportedStage?: string;
   waterProblem: 'none' | 'shortage' | 'pump_power_issue' | 'source_depleted';
   cropProblem: 'none' | 'pest_disease' | 'yellowing_drying' | 'other';
   callbackRequested: boolean;
+  voiceNoteUrl?: string;
 }
+

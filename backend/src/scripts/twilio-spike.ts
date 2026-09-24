@@ -65,20 +65,67 @@ async function runRealSpike() {
     callCompletedResolve = resolve;
   });
 
+  let publicUrl = '';
+
   const server = http.createServer((req, res) => {
-    if (req.url === '/spike/twiml') {
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say language="te-IN">నమస్కారం! ఇది ఆంధ్రప్రదేశ్ నీటిపారుదల వ్యవస్థ పరీక్ష కాల్. సిస్టమ్ విజయవంతంగా పనిచేస్తుంది.</Say>
-  <Pause length="1"/>
-  <Say language="en-IN">This is an automated test call from the Community Service Project Intelligent Irrigation System. Telephony integration is operational.</Say>
-</Response>`;
-      res.writeHead(200, { 'Content-Type': 'text/xml' });
-      res.end(twiml);
-      console.log('📡 [Spike Server] Served Telugu & English TwiML response.');
+    // 1. Serve sample hosted audio for <Play>
+    if (req.url === '/spike/sample-audio.mp3') {
+      // 1-second minimal MP3 silent frame
+      const mp3Header = Buffer.from([
+        0xff, 0xfb, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+      ]);
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': mp3Header.length,
+      });
+      res.end(mp3Header);
+      console.log('🎵 [Spike Server] Served sample hosted MP3 audio.');
       return;
     }
 
+    // 2. Initial TwiML with <Play> and DTMF <Gather>
+    if (req.url === '/spike/twiml') {
+      const audioUrl = `${publicUrl}/spike/sample-audio.mp3`;
+      const gatherAction = `${publicUrl}/spike/gather`;
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play>${audioUrl}</Play>
+  <Gather action="${gatherAction}" method="POST" numDigits="1" timeout="10">
+    <Say language="te-IN">నమస్కారం! ఇది ఆంధ్రప్రదేశ్ నీటిపారుదల వ్యవస్థ పరీక్ష కాల్. దయచేసి మీ ఫోన్ కీప్యాడ్‌పై ఏదైనా ఒక అంకె నొక్కండి.</Say>
+    <Say language="en-IN">Welcome to the irrigation test call. Please press any digit on your keypad.</Say>
+  </Gather>
+  <Say language="en-IN">No keypad digit was detected. Goodbye.</Say>
+  <Hangup/>
+</Response>`;
+      res.writeHead(200, { 'Content-Type': 'text/xml' });
+      res.end(twiml);
+      console.log('📡 [Spike Server] Served TwiML with <Play> audio and DTMF <Gather>.');
+      return;
+    }
+
+    // 3. DTMF round-trip handler receiving farmer keypad digit
+    if (req.url === '/spike/gather' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        const params = new URLSearchParams(body);
+        const digits = params.get('Digits') || 'none';
+        console.log(`📱 [Spike DTMF] SUCCESS: Received DTMF digit from farmer keypad: '${digits}'`);
+
+        const responseTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say language="te-IN">మీరు ${digits} నొక్కారు. ధన్యవాదాలు! పరీక్ష విజయవంతమైంది.</Say>
+  <Say language="en-IN">Received digit ${digits}. DTMF round-trip verified successfully. Goodbye.</Say>
+  <Hangup/>
+</Response>`;
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        res.end(responseTwiml);
+      });
+      return;
+    }
+
+    // 4. Status callback webhook
     if (req.url === '/spike/status' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
@@ -105,7 +152,6 @@ async function runRealSpike() {
   console.log('🚀 Spawning ngrok tunnel...');
   const ngrokProcess = spawn('ngrok', ['http', PORT.toString(), '--log=stdout']);
 
-  let publicUrl = '';
   ngrokProcess.stdout.on('data', (data: Buffer) => {
     const text = data.toString();
     const urlMatch = text.match(/url=(https:\/\/[^\s]+)/);

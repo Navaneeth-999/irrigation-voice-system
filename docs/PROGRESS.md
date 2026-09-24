@@ -85,13 +85,13 @@
 
 ### How to Run and Test Phase 3
 
-#### 1. Backend Automated Tests (60/60 tests passing):
+#### 1. Backend Automated Tests (66/66 tests passing):
 ```bash
 cd backend
 npm test
 ```
 
-#### 2. Twilio Spike Pre-Flight Check:
+#### 2. Twilio Spike Pre-Flight Check with Hosted Audio & DTMF:
 ```bash
 npm run twilio:spike --prefix backend
 ```
@@ -100,4 +100,4 @@ npm run twilio:spike --prefix backend
 1. Start backend: `npm run dev --prefix backend` (port 4000)
 2. Start frontend: `npm run dev --prefix frontend` (port 5173)
 3. Open browser at `http://localhost:5173/demo/call-simulator`
-4. Select active season, click "Start Telugu Voice Call", and use the dialpad to step through questions.
+4. Select active demo season, click "Start Telugu Voice Call", and use the dialpad to step through questions.
