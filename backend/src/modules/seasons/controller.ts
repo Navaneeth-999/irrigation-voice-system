@@ -272,8 +272,16 @@ export async function completeSeason(req: Request, res: Response): Promise<void>
   }
   const season = seasonRes.rows[0];
 
+  if (season.status === 'draft') {
+    throw new AppError('Cannot complete a season that is in Draft status. Season must be active or monitoring first.', 400, 'CANNOT_COMPLETE_DRAFT');
+  }
+
   if (['completed', 'cancelled'].includes(season.status)) {
     throw new AppError(`Season is already ${season.status}.`, 400, 'ALREADY_COMPLETED');
+  }
+
+  if (new Date(data.actual_harvest_date) < new Date(season.sowing_date)) {
+    throw new AppError('Actual harvest date cannot be earlier than the sowing date.', 400, 'INVALID_HARVEST_DATE');
   }
 
   const updatedRes = await db.query(`

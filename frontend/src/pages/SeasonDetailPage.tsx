@@ -303,8 +303,8 @@ export const SeasonDetailPage: React.FC = () => {
                   onClick={() => setIsFeedbackModalOpen(true)}
                   className="flex items-center gap-1.5"
                 >
-                  <PhoneCall className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Simulate Voice Feedback</span>
+                  <FileText className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Enter feedback manually</span>
                 </Button>
 
                 <Button
@@ -431,7 +431,7 @@ export const SeasonDetailPage: React.FC = () => {
           }`}
         >
           <PhoneCall className="w-4 h-4" />
-          <span>Voice Feedback Cycles (కాల్ ఫీడ్‌బ్యాక్)</span>
+          <span>Fortnightly Feedback (పక్షం రోజుల ఫీడ్‌బ్యాక్)</span>
           <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full font-mono">
             {feedbackRecords?.length || 0}
           </span>
@@ -564,11 +564,11 @@ export const SeasonDetailPage: React.FC = () => {
       {activeTab === 'feedback' && (
         <Card className="overflow-hidden">
           <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-sm font-bold text-gray-900">Farmer Weekly Voice Feedback Log</h3>
+            <h3 className="text-sm font-bold text-gray-900">Farmer Fortnightly Feedback Log (రైతు పక్షం రోజుల ఫీడ్‌బ్యాక్)</h3>
             {canManage && !isCompleted && (
               <Button size="sm" onClick={() => setIsFeedbackModalOpen(true)} className="flex items-center gap-1.5">
                 <Plus className="w-3.5 h-3.5" />
-                <span>Simulate Call Feedback</span>
+                <span>Enter feedback manually</span>
               </Button>
             )}
           </div>
@@ -833,15 +833,15 @@ export const SeasonDetailPage: React.FC = () => {
         </form>
       </Modal>
 
-      {/* Modal: Simulate Farmer Voice Feedback */}
-      <Modal isOpen={isFeedbackModalOpen} onClose={() => setIsFeedbackModalOpen(false)} title="Simulate Farmer Call Feedback (వాయిస్ కాల్ ఫీడ్‌బ్యాక్)">
+      {/* Modal: Enter Feedback Manually */}
+      <Modal isOpen={isFeedbackModalOpen} onClose={() => setIsFeedbackModalOpen(false)} title="Enter feedback manually (రైతు ఫీడ్‌బ్యాక్ నమోదు)">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             const start = new Date(season.sowing_date);
-            start.setDate(start.getDate() + (fbCycle - 1) * 7);
+            start.setDate(start.getDate() + (fbCycle - 1) * 14);
             const end = new Date(start);
-            end.setDate(end.getDate() + 7);
+            end.setDate(end.getDate() + 14);
 
             logFeedbackMutation.mutate({
               season_id: id,
@@ -857,8 +857,8 @@ export const SeasonDetailPage: React.FC = () => {
               water_problem: fbWaterProblem,
               crop_problem: fbCropProblem,
               callback_requested: fbCallback,
-              source: 'ivr',
-              is_simulated: true,
+              source: 'manual',
+              is_simulated: false,
             });
           }}
           className="space-y-4"
@@ -980,7 +980,7 @@ export const SeasonDetailPage: React.FC = () => {
               Cancel
             </Button>
             <Button type="submit" disabled={logFeedbackMutation.isPending}>
-              {logFeedbackMutation.isPending ? 'Simulating...' : 'Submit Cycle Feedback'}
+              {logFeedbackMutation.isPending ? 'Saving...' : 'Save Feedback'}
             </Button>
           </div>
         </form>

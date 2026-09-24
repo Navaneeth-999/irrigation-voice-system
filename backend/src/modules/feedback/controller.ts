@@ -39,11 +39,32 @@ export async function createFeedback(req: Request, res: Response): Promise<void>
   }
   const season = seasonRes.rows[0];
 
+  // 2. Reject feedback if season is in draft, completed, or cancelled status
+  if (season.status === 'draft') {
+    throw new AppError('Cannot record feedback for a draft season. Activate the season first.', 400, 'SEASON_NOT_ACTIVE');
+  }
+  if (['completed', 'cancelled'].includes(season.status)) {
+    throw new AppError(`Cannot record feedback for a ${season.status} season.`, 400, 'SEASON_TERMINATED');
+  }
+
+  // 3. Enforce Unique Cycle Feedback check
+  const duplicateCheck = await db.query(
+    'SELECT id FROM farmer_feedback WHERE season_id = $1 AND cycle_number = $2',
+    [data.season_id, data.cycle_number]
+  );
+  if (duplicateCheck.rows.length > 0) {
+    throw new AppError(
+      `Feedback for Cycle ${data.cycle_number} has already been recorded for this season.`,
+      409,
+      'DUPLICATE_CYCLE_FEEDBACK'
+    );
+  }
+
   // Compute expected stage before opening the transaction (avoids PGlite nested client lock)
   const expectedStageId = await computeExpectedStage(season.crop_id, season.sowing_date, data.period_end);
 
   const result = await withTransaction(async (tx) => {
-    // 2. Insert Farmer Feedback
+    // 4. Insert Farmer Feedback
     const fbRes = await tx.query(`
       INSERT INTO farmer_feedback (
         season_id, cycle_number, period_start, period_end,
@@ -63,7 +84,7 @@ export async function createFeedback(req: Request, res: Response): Promise<void>
     ]);
     const feedback = fbRes.rows[0];
 
-    // 3. If farmer reported irrigating and pump hours > 0, generate irrigation record automatically
+    // 5. If farmer reported irrigating and pump hours > 0, generate irrigation record automatically
     let irrigationRecord = null;
     if (data.irrigated && data.pump_hours > 0) {
       const calcResult = calculateIrrigationVolume({
@@ -91,7 +112,7 @@ export async function createFeedback(req: Request, res: Response): Promise<void>
       irrigationRecord = irRes.rows[0];
     }
 
-    // 4. Record Crop Progress observation
+    // 6. Record Crop Progress observation
     await tx.query(`
       INSERT INTO crop_progress (
         season_id, observed_on, reported_stage_id, expected_stage_id,
@@ -105,46 +126,60 @@ export async function createFeedback(req: Request, res: Response): Promise<void>
       data.is_simulated, `Recorded via Cycle ${data.cycle_number} feedback`,
     ]);
 
-    // 5. Raise Action Items if problems reported
+    // 7. Deduplicated Action Items creation (dedupes open/assigned/in_progress per season + type)
+    async function createDeduplicatedActionItem(
+      actionType: string,
+      priority: string,
+      note: string
+    ) {
+      const existingOpen = await tx.query(`
+        SELECT id FROM action_items
+        WHERE season_id = $1 AND type = $2 AND status IN ('open', 'assigned', 'in_progress')
+      `, [season.id, actionType]);
+
+      if (existingOpen.rows.length === 0) {
+        await tx.query(`
+          INSERT INTO action_items (
+            source, farmer_id, season_id, type, status, priority, referral_note, related_feedback_id
+          )
+          VALUES ('call', $1, $2, $3, 'open', $4, $5, $6)
+        `, [
+          season.farmer_id, season.id, actionType, priority, note, feedback.id,
+        ]);
+      }
+    }
+
     if (data.water_problem !== 'none') {
       const typeMap: Record<string, string> = {
         shortage: 'water_shortage',
         pump_power: 'pump_power_problem',
         source_unavailable: 'source_unavailable',
       };
-      await tx.query(`
-        INSERT INTO action_items (
-          source, farmer_id, season_id, type, status, priority, referral_note, related_feedback_id
-        )
-        VALUES ('call', $1, $2, $3, 'open', 'high', $4, $5)
-      `, [
-        season.farmer_id, season.id, typeMap[data.water_problem] || 'other_field_issue',
-        `Farmer reported water problem: ${data.water_problem}`, feedback.id,
-      ]);
+      const actionType = typeMap[data.water_problem] || 'other_field_issue';
+      await createDeduplicatedActionItem(
+        actionType,
+        'high',
+        `Farmer reported water problem: ${data.water_problem}`
+      );
     }
 
     if (data.crop_problem !== 'none') {
-      await tx.query(`
-        INSERT INTO action_items (
-          source, farmer_id, season_id, type, status, priority, referral_note, related_feedback_id
-        )
-        VALUES ('call', $1, $2, 'crop_pest_disease', 'open', 'medium', $3, $4)
-      `, [
-        season.farmer_id, season.id,
-        `Farmer reported crop issue: ${data.crop_problem}`, feedback.id,
-      ]);
+      await createDeduplicatedActionItem(
+        'crop_pest_disease',
+        'medium',
+        `Farmer reported crop issue: ${data.crop_problem}`
+      );
     }
 
     if (data.callback_requested) {
-      await tx.query(`
-        INSERT INTO action_items (
-          source, farmer_id, season_id, type, status, priority, referral_note, related_feedback_id
-        )
-        VALUES ('call', $1, $2, 'callback_requested', 'open', 'medium', 'Farmer requested phone callback from field team', $3)
-      `, [season.farmer_id, season.id, feedback.id]);
+      await createDeduplicatedActionItem(
+        'callback_requested',
+        'medium',
+        'Farmer requested phone callback from field team'
+      );
     }
 
-    // 6. Transition season status to 'monitoring' if currently 'active'
+    // 8. Transition season status to 'monitoring' if currently 'active'
     if (season.status === 'active') {
       await tx.query(`
         UPDATE seasons SET status = 'monitoring', updated_at = CURRENT_TIMESTAMP WHERE id = $1

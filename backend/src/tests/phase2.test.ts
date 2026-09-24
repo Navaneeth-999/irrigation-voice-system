@@ -156,6 +156,46 @@ describe('Phase 2: Seasons, Records, Feedback & Actions Tests', () => {
       expect(parseFloat(refreshedSeasonRes.body.data.area_acres_snapshot)).toBe(3.0);
     });
 
+    it('rejects feedback submission while season is still in draft status', async () => {
+      const res = await request(app)
+        .post('/api/v1/feedback')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          season_id: seasonId,
+          cycle_number: 1,
+          period_start: '2026-06-15',
+          period_end: '2026-06-28',
+          rainfall_class: 'none',
+          irrigated: false,
+          pump_hours: 0,
+          crop_condition: 'good',
+          stage_confirmed: true,
+          water_problem: 'none',
+          crop_problem: 'none',
+          callback_requested: false,
+          source: 'manual',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('SEASON_NOT_ACTIVE');
+    });
+
+    it('rejects completing a season while still in draft status', async () => {
+      const res = await request(app)
+        .post(`/api/v1/seasons/${seasonId}/complete`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actual_harvest_date: '2026-10-25',
+          yield_value: 5000,
+          yield_unit: 'kg',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('CANNOT_COMPLETE_DRAFT');
+    });
+
     it('activates season and permanently freezes snapshot', async () => {
       const activateRes = await request(app)
         .post(`/api/v1/seasons/${seasonId}/activate`)
@@ -316,14 +356,75 @@ describe('Phase 2: Seasons, Records, Feedback & Actions Tests', () => {
       expect(types).toContain('callback_requested');
     });
 
+    it('rejects duplicate feedback submission for the same cycle', async () => {
+      const duplicatePayload = {
+        season_id: seasonId,
+        cycle_number: 1, // Already submitted
+        period_start: '2026-07-01',
+        period_end: '2026-07-14',
+        rainfall_class: 'none',
+        irrigated: false,
+        pump_hours: 0,
+        crop_condition: 'good',
+        stage_confirmed: true,
+        water_problem: 'none',
+        crop_problem: 'none',
+        callback_requested: false,
+        source: 'manual',
+      };
+
+      const res = await request(app)
+        .post('/api/v1/feedback')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send(duplicatePayload);
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('DUPLICATE_CYCLE_FEEDBACK');
+    });
+
+    it('deduplicates open action items when subsequent feedback reports the same issue', async () => {
+      // Cycle 2 feedback reports water shortage again
+      const cycle2Payload = {
+        season_id: seasonId,
+        cycle_number: 2,
+        period_start: '2026-07-15',
+        period_end: '2026-07-28',
+        rainfall_class: 'light',
+        irrigated: true,
+        pump_hours: 4.0,
+        crop_condition: 'average',
+        stage_confirmed: true,
+        water_problem: 'shortage', // already an open action item for this
+        crop_problem: 'none',
+        callback_requested: true,  // already an open action item for this
+        source: 'manual',
+      };
+
+      const res = await request(app)
+        .post('/api/v1/feedback')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send(cycle2Payload);
+
+      expect(res.status).toBe(201);
+
+      // Verify that water_shortage open action items count is STILL 1 (deduped!)
+      const actionsRes = await request(app)
+        .get(`/api/v1/action-items?season_id=${seasonId}&type=water_shortage&status=open`)
+        .set('Cookie', adminCookie);
+
+      expect(actionsRes.status).toBe(200);
+      expect(actionsRes.body.data.length).toBe(1);
+    });
+
     it('lists feedback history for the season', async () => {
       const res = await request(app)
         .get(`/api/v1/feedback?season_id=${seasonId}`)
         .set('Cookie', adminCookie);
 
       expect(res.status).toBe(200);
-      expect(res.body.data.length).toBe(1);
-      expect(res.body.data[0].cycle_number).toBe(1);
+      expect(res.body.data.length).toBe(2);
     });
   });
 

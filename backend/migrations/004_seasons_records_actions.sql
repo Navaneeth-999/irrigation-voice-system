@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS farmer_feedback (
     voice_note_path TEXT,
     source VARCHAR(50) NOT NULL DEFAULT 'manual' CHECK (source IN ('ivr', 'manual', 'simulator')),
     is_simulated BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_farmer_feedback_season_cycle UNIQUE (season_id, cycle_number)
 );
 
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_season ON farmer_feedback(season_id, cycle_number);
