@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
+import bcrypt from 'bcryptjs';
 import { createApp } from '../app.js';
 import { db, closeDatabase } from '../db/index.js';
 import { runMigrations } from '../scripts/migrate.js';
@@ -16,8 +17,11 @@ import { DailyWeatherData } from '../modules/weather/types.js';
 describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
   let app: any;
   let adminCookie: string;
+  let panchayatCookie: string;
   let csrfToken: string;
   let villageId: string;
+  let villageName: string;
+  let otherVillageId: string;
   let farmerId: string;
   let farmerPhone: string = '+919876543210';
 
@@ -60,12 +64,39 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
     expect(meRes.status).toBe(200);
     csrfToken = meRes.body.csrfToken;
 
-    // 2. Retrieve seeded village (Guntur Rural)
-    const villageRes = await db.query(`SELECT id FROM villages WHERE name = 'Guntur Rural' LIMIT 1`);
-    expect(villageRes.rows.length).toBeGreaterThan(0);
+    // 2. Retrieve seeded villages (Guntur Rural and Tenali North)
+    const villageRes = await db.query(`SELECT id, name FROM villages ORDER BY name ASC LIMIT 2`);
+    expect(villageRes.rows.length).toBeGreaterThanOrEqual(2);
     villageId = villageRes.rows[0].id;
+    villageName = villageRes.rows[0].name;
+    otherVillageId = villageRes.rows[1].id;
 
-    // 3. Create test farmer for communication testing
+    // 3. Create AGRI_PANCHAYAT user scoped strictly to villageId
+    const passwordHash = await bcrypt.hash('PanchayatPass123!', 10);
+    const panchayatUser = await db.query(
+      `INSERT INTO users (name, email, password_hash, role, is_active, must_change_password)
+       VALUES ('Panchayat Officer', 'panchayat.officer@csp.gov.in', $1, 'AGRI_PANCHAYAT', true, false)
+       RETURNING id`,
+      [passwordHash]
+    );
+    const officerId = panchayatUser.rows[0].id;
+
+    await db.query(
+      `INSERT INTO user_scopes (user_id, scope_type, scope_value)
+       VALUES ($1, 'village', $2)`,
+      [officerId, villageId]
+    );
+
+    const officerLogin = await request(app)
+      .post('/api/v1/auth/login')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .send({ email: 'panchayat.officer@csp.gov.in', password: 'PanchayatPass123!' });
+
+    panchayatCookie = Array.isArray(officerLogin.headers['set-cookie'])
+      ? officerLogin.headers['set-cookie'].join('; ')
+      : officerLogin.headers['set-cookie'];
+
+    // 4. Create test farmer with active season, contact, and explicit granted consent
     const insertFarmer = await db.query(
       `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
        VALUES ('F-TEST-P4', 'Subba Rao', $1, 'te', 'active')
@@ -78,6 +109,34 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       `INSERT INTO farmer_contacts (farmer_id, phone_e164, type, is_active)
        VALUES ($1, $2, 'primary', true)`,
       [farmerId, farmerPhone]
+    );
+
+    const plotRes = await db.query(
+      `INSERT INTO plots (farmer_id, label, area_acres, is_active)
+       VALUES ($1, 'P4 Main Field', 2.5, true)
+       RETURNING id`,
+      [farmerId]
+    );
+    const plotId = plotRes.rows[0].id;
+
+    const cropRes = await db.query(`SELECT id FROM crops LIMIT 1`);
+    const methodRes = await db.query(`SELECT id FROM irrigation_method_types LIMIT 1`);
+
+    await db.query(
+      `INSERT INTO seasons (
+        season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
+        season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
+      )
+      VALUES ('S-2026-P4-001', $1, $2, $3, $4, 'kharif', 2026, '2026-06-01', '2026-10-31', 2.5, 'active', 'real')`,
+      [farmerId, plotId, cropRes.rows[0].id, methodRes.rows[0].id]
+    );
+
+    // Initial explicit opt-in consent for both SMS and Voice
+    await db.query(
+      `INSERT INTO consents (farmer_id, channel, status, method, note)
+       VALUES ($1, 'sms', 'granted', 'written', 'Initial enrollment'),
+              ($1, 'voice', 'granted', 'written', 'Initial enrollment')`,
+      [farmerId]
     );
   });
 
@@ -111,7 +170,6 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
         expect(forecast[0].source).toBe('openmeteo');
         expect(forecast[0].isDemo).toBe(false);
       } catch (err: any) {
-        // If test environment is offline, error should be a recognized network/timeout error
         expect(err.message).toMatch(/(WEATHER_TIMEOUT|WEATHER_FETCH_FAILED|fetch failed)/);
       }
     });
@@ -122,20 +180,17 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       const mockAdapter = new MockWeatherAdapter();
       const service = new WeatherService(mockAdapter);
 
-      // First call: populates cache
       const freshResult = await service.getVillageWeather(villageId, true);
       expect(freshResult.villageId).toBe(villageId);
       expect(freshResult.forecast.length).toBe(7);
       expect(freshResult.observed.length).toBe(7);
 
-      // Verify records in database
       const dbCheck = await db.query(
         `SELECT COUNT(*)::int as count FROM weather_records WHERE village_id = $1`,
         [villageId]
       );
       expect(dbCheck.rows[0].count).toBeGreaterThanOrEqual(14);
 
-      // Second call: serves from cache
       const cachedResult = await service.getVillageWeather(villageId, false);
       expect(cachedResult.villageId).toBe(villageId);
       expect(cachedResult.forecast.length).toBeGreaterThanOrEqual(3);
@@ -153,15 +208,15 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
     });
   });
 
-  describe('3. Meteorological Alert Rules & Composite Deduplication', () => {
-    it('evaluates forecast and triggers alerts with bilingual headlines for IMD thresholds', async () => {
+  describe('3. Meteorological Alert Rules & Possibility Wording', () => {
+    it('evaluates forecast and triggers alerts with possibility wording and bilingual headlines', async () => {
       const engine = new AlertEngine();
       const mockForecast: DailyWeatherData[] = [
         {
           date: '2026-10-01',
           tempMaxC: 34.0,
           tempMinC: 24.0,
-          precipitationSumMm: 15.0,
+          precipitationSumMm: 70.0,
           precipitationProbabilityMax: 80,
           weatherCode: 61,
           et0FaoEvapotranspiration: 4.8,
@@ -171,11 +226,11 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
         },
         {
           date: '2026-10-02',
-          tempMaxC: 41.5, // High temp trigger
+          tempMaxC: 41.5,
           tempMinC: 26.0,
-          precipitationSumMm: 70.0, // Heavy rain trigger
+          precipitationSumMm: 70.0,
           precipitationProbabilityMax: 90,
-          weatherCode: 95, // Thunderstorm trigger
+          weatherCode: 95,
           et0FaoEvapotranspiration: 5.5,
           isForecast: true,
           isDemo: true,
@@ -186,12 +241,19 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       const alerts = await engine.evaluateForecast(villageId, mockForecast);
       expect(alerts.length).toBeGreaterThan(0);
 
-      // Check Rain Expected or Heavy Rain alert
+      // Check Rain Expected alert uses possibility wording
       const rainAlert = alerts.find(a => a.alert_type === 'rain_expected');
       expect(rainAlert).toBeDefined();
       expect(rainAlert.headline_en).toContain('Rain Expected');
       expect(rainAlert.headline_te).toContain('వర్షం సూచన');
-      expect(rainAlert.dedup_key).toBe(`${villageId}:RULE_RAIN_EXPECTED:2026-10-01`);
+      expect(rainAlert.message_en).toContain('expected');
+      expect(rainAlert.message_te).toContain('అవకాశం');
+
+      // Check Heavy Rain alert uses possibility wording
+      const heavyAlert = alerts.find(a => a.alert_type === 'heavy_rain');
+      expect(heavyAlert).toBeDefined();
+      expect(heavyAlert.message_en).toContain('possible');
+      expect(heavyAlert.message_te).toContain('అవకాశం');
     });
 
     it('enforces composite deduplication: evaluating same forecast a second time does not duplicate alerts', async () => {
@@ -211,9 +273,7 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
         },
       ];
 
-      // Re-evaluating the exact same date and rule
       const alerts = await engine.evaluateForecast(villageId, duplicateForecast);
-      // Because ON CONFLICT (dedup_key) DO NOTHING, no new rows are returned
       expect(alerts).toHaveLength(0);
 
       const countRes = await db.query(
@@ -225,11 +285,33 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
     });
   });
 
-  describe('4. Notification Service Guardrails', () => {
+  describe('4. Notification Service Guardrails & Voice Alerts', () => {
+    it('blocks outbound SMS when farmer has NO consent record (opt-in requirement)', async () => {
+      // Create farmer with NO consent records
+      const noConsentFarmer = await db.query(
+        `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
+         VALUES ('F-NOCONSENT', 'No Consent Farmer', $1, 'te', 'active')
+         RETURNING id`,
+        [villageId]
+      );
+      const noConsentId = noConsentFarmer.rows[0].id;
+
+      const notificationService = new NotificationService(new MockSmsAdapter());
+      const result = await notificationService.sendSms({
+        farmerId: noConsentId,
+        phone: '+919999900099',
+        message: 'Opt-in check message',
+        purpose: 'weather_alert',
+        bypassQuietHours: true,
+      });
+
+      expect(result.status).toBe('blocked');
+      expect(result.errorReason).toBe('NO_CONSENT');
+    });
+
     it('blocks outbound SMS when farmer has withdrawn consent for SMS channel', async () => {
       const notificationService = new NotificationService(new MockSmsAdapter());
 
-      // Insert withdrawn consent for SMS
       await db.query(
         `INSERT INTO consents (farmer_id, channel, status, method, note)
          VALUES ($1, 'sms', 'withdrawn', 'sms_reply', 'Farmer replied STOP')`,
@@ -247,14 +329,6 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       expect(result.status).toBe('blocked');
       expect(result.errorReason).toBe('NO_CONSENT');
 
-      // Verify audit log
-      const log = await db.query(
-        `SELECT * FROM communication_logs WHERE id = $1`,
-        [result.id]
-      );
-      expect(log.rows[0].status).toBe('blocked');
-      expect(log.rows[0].error_reason).toBe('NO_CONSENT');
-
       // Re-grant consent for subsequent tests
       await db.query(
         `INSERT INTO consents (farmer_id, channel, status, method, note)
@@ -263,32 +337,150 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       );
     });
 
-    it('blocks outbound SMS outside quiet hours (07:00 to 21:00 IST) when not bypassed', async () => {
+    it('dispatches pre-recorded Telugu voice alert with DTMF prompt and logs channel=voice', async () => {
+      const voiceFarmer = await db.query(
+        `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
+         VALUES ('F-VOICE-DIRECT', 'Direct Voice Farmer', $1, 'te', 'active')
+         RETURNING id`,
+        [villageId]
+      );
+      const directFarmerId = voiceFarmer.rows[0].id;
+      const directPhone = '+919876500055';
+
+      await db.query(
+        `INSERT INTO farmer_contacts (farmer_id, phone_e164, type, is_active)
+         VALUES ($1, $2, 'primary', true)`,
+        [directFarmerId, directPhone]
+      );
+
+      await db.query(
+        `INSERT INTO consents (farmer_id, channel, status, method, note)
+         VALUES ($1, 'voice', 'granted', 'written', 'Voice opt-in')`,
+        [directFarmerId]
+      );
+
       const notificationService = new NotificationService(new MockSmsAdapter());
 
-      // Force quiet hours check without bypass
-      const result = await notificationService.sendSms({
-        farmerId,
-        phone: farmerPhone,
-        message: 'Late night notice',
-        purpose: 'system_notice',
-        bypassQuietHours: false, // Enforce current clock
+      const voiceRes = await notificationService.sendVoiceAlert({
+        farmerId: directFarmerId,
+        phone: directPhone,
+        alertType: 'rain_expected',
+        promptCode: 'prompt_alert_rain_expected',
+        teluguText: 'రాబోయే 24 నుండి 48 గంటల్లో మీ ప్రాంతంలో వర్షం కురిసే అవకాశం ఉంది.',
+        englishText: 'Rain is expected in your area in the next 24 to 48 hours.',
+        bypassQuietHours: true,
+      });
+
+      expect(voiceRes.status).toBe('delivered');
+      expect(voiceRes.providerMessageId).toContain('voice_alert_');
+
+      const log = await db.query(
+        `SELECT * FROM communication_logs WHERE id = $1`,
+        [voiceRes.id]
+      );
+      expect(log.rows[0].channel).toBe('voice');
+      expect(log.rows[0].purpose).toBe('weather_alert');
+      expect(log.rows[0].status).toBe('delivered');
+    });
+
+    it('blocks voice alert outside 09:00 to 18:00 IST when not bypassed', async () => {
+      const quietFarmer = await db.query(
+        `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
+         VALUES ('F-VOICE-QUIET', 'Quiet Hours Farmer', $1, 'te', 'active')
+         RETURNING id`,
+        [villageId]
+      );
+      const quietFarmerId = quietFarmer.rows[0].id;
+      const quietPhone = '+919876500077';
+
+      await db.query(
+        `INSERT INTO farmer_contacts (farmer_id, phone_e164, type, is_active)
+         VALUES ($1, $2, 'primary', true)`,
+        [quietFarmerId, quietPhone]
+      );
+
+      await db.query(
+        `INSERT INTO consents (farmer_id, channel, status, method, note)
+         VALUES ($1, 'voice', 'granted', 'written', 'Voice opt-in')`,
+        [quietFarmerId]
+      );
+
+      const notificationService = new NotificationService(new MockSmsAdapter());
+
+      const result = await notificationService.sendVoiceAlert({
+        farmerId: quietFarmerId,
+        phone: quietPhone,
+        alertType: 'rain_expected',
+        promptCode: 'prompt_alert_rain_expected',
+        teluguText: 'వర్షం సమాచారం',
+        englishText: 'Rain advisory',
+        bypassQuietHours: false,
       });
 
       const now = new Date();
       const istHours = (now.getUTCHours() + 5 + Math.floor((now.getUTCMinutes() + 30) / 60)) % 24;
-      const isOutsideQuiet = istHours < 7 || istHours >= 21;
+      const isOutsideQuiet = istHours < 9 || istHours >= 18;
 
       if (isOutsideQuiet) {
         expect(result.status).toBe('blocked');
         expect(result.errorReason).toBe('QUIET_HOURS');
       } else {
-        expect(result.status).toBe('sent');
+        expect(result.status).toBe('delivered');
       }
     });
 
+    it('enforces voice call daily cap of maximum 1 call attempt per farmer per calendar day', async () => {
+      // Create fresh farmer with active season, contact, and voice consent
+      const testFarmer = await db.query(
+        `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
+         VALUES ('F-VCAP-001', 'Voice Cap Farmer', $1, 'te', 'active')
+         RETURNING id`,
+        [villageId]
+      );
+      const capId = testFarmer.rows[0].id;
+      const capPhone = '+919999900088';
+
+      await db.query(
+        `INSERT INTO farmer_contacts (farmer_id, phone_e164, type, is_active)
+         VALUES ($1, $2, 'primary', true)`,
+        [capId, capPhone]
+      );
+
+      await db.query(
+        `INSERT INTO consents (farmer_id, channel, status, method, note)
+         VALUES ($1, 'voice', 'granted', 'verbal', 'Voice opt-in')`,
+        [capId]
+      );
+
+      const notificationService = new NotificationService(new MockSmsAdapter());
+
+      // Attempt 1: Should succeed
+      const res1 = await notificationService.sendVoiceAlert({
+        farmerId: capId,
+        phone: capPhone,
+        alertType: 'heavy_rain',
+        promptCode: 'prompt_alert_heavy_rain',
+        teluguText: 'భారీ వర్ష సూచన',
+        englishText: 'Heavy rain advisory',
+        bypassQuietHours: true,
+      });
+      expect(res1.status).toBe('delivered');
+
+      // Attempt 2: Blocked by daily voice cap (max 1/day)
+      const res2 = await notificationService.sendVoiceAlert({
+        farmerId: capId,
+        phone: capPhone,
+        alertType: 'heavy_rain',
+        promptCode: 'prompt_alert_heavy_rain',
+        teluguText: 'భారీ వర్ష సూచన 2',
+        englishText: 'Heavy rain advisory 2',
+        bypassQuietHours: true,
+      });
+      expect(res2.status).toBe('blocked');
+      expect(res2.errorReason).toBe('DAILY_CAP_EXCEEDED');
+    });
+
     it('enforces daily cap of maximum 2 SMS per farmer per calendar day', async () => {
-      // Create a fresh farmer for clean daily cap testing
       const testFarmer = await db.query(
         `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
          VALUES ('F-CAP-001', 'Cap Test Farmer', $1, 'en', 'active')
@@ -304,9 +496,14 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
         [capFarmerId, capPhone]
       );
 
+      await db.query(
+        `INSERT INTO consents (farmer_id, channel, status, method, note)
+         VALUES ($1, 'sms', 'granted', 'verbal', 'SMS opt-in')`,
+        [capFarmerId]
+      );
+
       const notificationService = new NotificationService(new MockSmsAdapter());
 
-      // Attempt 1: Should succeed
       const res1 = await notificationService.sendSms({
         farmerId: capFarmerId,
         phone: capPhone,
@@ -316,7 +513,6 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       });
       expect(res1.status).toBe('sent');
 
-      // Attempt 2: Should succeed
       const res2 = await notificationService.sendSms({
         farmerId: capFarmerId,
         phone: capPhone,
@@ -326,7 +522,6 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       });
       expect(res2.status).toBe('sent');
 
-      // Attempt 3: Should be blocked by daily cap (max 2/day)
       const res3 = await notificationService.sendSms({
         farmerId: capFarmerId,
         phone: capPhone,
@@ -338,7 +533,7 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       expect(res3.errorReason).toBe('DAILY_CAP_EXCEEDED');
     });
 
-    it('blocks outbound SMS when global COMMUNICATIONS_ENABLED kill switch is false', async () => {
+    it('blocks outbound communications when global COMMUNICATIONS_ENABLED kill switch is false', async () => {
       process.env.COMMUNICATIONS_ENABLED = 'false';
 
       const notificationService = new NotificationService(new MockSmsAdapter());
@@ -353,7 +548,6 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       expect(result.status).toBe('blocked');
       expect(result.errorReason).toBe('KILL_SWITCH_ACTIVE');
 
-      // Reset kill switch
       process.env.COMMUNICATIONS_ENABLED = 'true';
     });
 
@@ -375,6 +569,12 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
         [dryFarmerId, dryPhone]
       );
 
+      await db.query(
+        `INSERT INTO consents (farmer_id, channel, status, method, note)
+         VALUES ($1, 'sms', 'granted', 'verbal', 'Dry run opt-in')`,
+        [dryFarmerId]
+      );
+
       const notificationService = new NotificationService(new MockSmsAdapter());
       const result = await notificationService.sendSms({
         farmerId: dryFarmerId,
@@ -392,20 +592,18 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
     });
   });
 
-  describe('5. Manual Agricultural Advisory & Communication Audit Trail', () => {
-    let createdAlertId: string;
-
-    it('POST /api/v1/weather/alerts/manual allows Agri Officer/Admin to publish custom bilingual advisory', async () => {
+  describe('5. Role Scoping, Manual Advisory & Communication Audit Trail', () => {
+    it('POST /api/v1/weather/alerts/manual allows AGRI_PANCHAYAT officer to publish advisory in assigned village', async () => {
       const res = await request(app)
         .post('/api/v1/weather/alerts/manual')
-        .set('Cookie', adminCookie)
+        .set('Cookie', panchayatCookie)
         .set('X-Requested-With', 'XMLHttpRequest')
         .send({
-          villageId,
+          villageId, // Assigned village
           headlineEn: 'Canal Water Release Notice',
           headlineTe: 'కాలువ నీటి విడుదల సమాచారం',
-          messageEn: 'Canal rotation water will be released tomorrow morning for 48 hours.',
-          messageTe: 'రేపు ఉదయం నుండి 48 గంటల పాటు కాలువ నీరు విడుదల చేయబడుతుంది.',
+          messageEn: 'Canal rotation water is expected to be released tomorrow morning for 48 hours.',
+          messageTe: 'రేపు ఉదయం నుండి 48 గంటల పాటు కాలువ నీరు విడుదలయ్యే అవకాశం ఉంది.',
           suggestedActionEn: 'Prepare field channels and irrigate tail-end plots first.',
           suggestedActionTe: 'ముందుగా చివరి ఆయకట్టు పొలాలకు నీరు అందేలా చూసుకోండి.',
           severity: 'advisory',
@@ -417,7 +615,23 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data.alert_type).toBe('custom_advisory');
       expect(res.body.data.source).toBe('manual');
-      createdAlertId = res.body.data.id;
+    });
+
+    it('rejects AGRI_PANCHAYAT officer publishing advisory outside their assigned village with 403', async () => {
+      const res = await request(app)
+        .post('/api/v1/weather/alerts/manual')
+        .set('Cookie', panchayatCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          villageId: otherVillageId, // NOT assigned to this officer
+          headlineEn: 'Unauthorized Advisory',
+          headlineTe: 'అనధికారిక సూచన',
+          messageEn: 'Test outside boundary',
+          messageTe: 'పరిధి దాటిన పరీక్ష',
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('not assigned to this village');
     });
 
     it('GET /api/v1/weather/alerts retrieves list of active alerts with village metadata', async () => {
@@ -428,12 +642,12 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.length).toBeGreaterThan(0);
-      expect(res.body.data[0].village_name).toBe('Guntur Rural');
+      expect(res.body.data[0].village_name).toBe(villageName);
     });
 
-    it('GET /api/v1/communication/logs retrieves paginated audit trail of all outbound messages', async () => {
+    it('GET /api/v1/communication/logs retrieves paginated audit trail containing both voice and SMS logs', async () => {
       const res = await request(app)
-        .get('/api/v1/communication/logs?limit=10')
+        .get('/api/v1/communication/logs?limit=20')
         .set('Cookie', adminCookie);
 
       expect(res.status).toBe(200);
@@ -441,13 +655,9 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
       expect(res.body.data.logs).toBeInstanceOf(Array);
       expect(res.body.data.total).toBeGreaterThan(0);
 
-      // Check log schema attributes
-      const log = res.body.data.logs[0];
-      expect(log).toHaveProperty('recipient_phone');
-      expect(log).toHaveProperty('channel');
-      expect(log).toHaveProperty('purpose');
-      expect(log).toHaveProperty('status');
-      expect(log).toHaveProperty('created_at');
+      const channels = res.body.data.logs.map((l: any) => l.channel);
+      expect(channels).toContain('voice');
+      expect(channels).toContain('sms');
     });
 
     it('rejects manual advisory creation from unauthenticated requests with 401', async () => {

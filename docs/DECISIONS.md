@@ -103,4 +103,16 @@ This living document records significant technical and architectural decisions, 
   3. **Window Expiry Guarantee:** Retries are strictly forbidden from firing past a schedule's due window end date (`cs.due_window_end >= CURRENT_DATE`). Once the window closes, any remaining uncompleted schedule is marked expired/failed, preventing stale data collection from contaminating subsequent fortnightly cycles.
   4. **Phase 5 Anomaly Rule Semantics:** Confirmed that Phase 5's implausible-hours anomaly rule will inspect the raw farmer-reported total pump hours (`farmer_feedback.pump_hours` / `irrigation_records.raw_value`), evaluating whether values exceed physical fortnightly maximums (e.g. > 336 hours in a 14-day cycle or exceeding well recharge rates) before/during volume estimation.
 
+---
+
+## DECISION-012: Meteorological vs. Crop-Stage Dry-Spell Scoping and Alert Fan-Out Channels
+- **Context:** Clarifying the operational scope of the dry-spell alert rule for the MVP, establishing multi-channel (voice + SMS) alert delivery, and defining strict privacy/regulatory targeting guards.
+- **Decision:**
+  1. **Village-Level Meteorological Dry Spell for MVP:** The Phase 4 dry-spell rule (`RULE_DRY_SPELL`) operates at the village meteorological level based on IMD standards (14+ dry days with $< 2.5\text{ mm}$ rain in historical village records and upcoming 7-day forecast $< 2.5\text{ mm}$).
+  2. **Crop-Stage-Aware Water Deficit Deferred to Phase 5:** Crop-stage-specific drought and soil moisture stress (integrating daily $K_c$, root zone depletion $D_r$, readily available water $RAW$, and days since last irrigation) is an agronomic water-balance calculation. It is explicitly deferred to Phase 5's FAO-56 Water Analytics Engine where each active season's soil water balance is tracked.
+  3. **Voice Alerts as Primary Delivery:** Weather alerts and official advisories must use pre-recorded Telugu voice calls (`channel = 'voice'`) using per-alert-type audio prompts (`ALERT_VOICE_PROMPTS`), with DTMF acknowledgement (press 1). Outbound SMS serves as an accompanying written reference.
+  4. **Strict Opt-In Channel Consent & Season Scoping:** Alert fan-out is strictly scoped to farmers who possess an active season (`seasons.status = 'active'`) in that village, an active primary contact, and explicit granted consent record (`consents.status = 'granted'`) for the target channel. Silence or absence of a consent record is treated as non-consent (`status = 'blocked'`, reason: `NO_CONSENT`).
+  5. **Role Mapping for Agricultural Officers:** Confirmed that "Agricultural Officers" in the manual advisory publishing feature maps directly to the existing `AGRI_PANCHAYAT` role in the schema, with village-level boundary enforcement via `user_scopes`.
+
+
 

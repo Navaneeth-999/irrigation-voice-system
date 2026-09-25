@@ -15,8 +15,8 @@
 | **Phase 1** | Foundation, RBAC, Auth with CSRF, Farmers, Plots, Ref Data, Dashboard Shell | **DONE** | Migrations 001-003 applied, 24/24 automated tests passed, frontend built cleanly. |
 | **Phase 2** | Seasons, Snapshots, Irrigation Records, Feedback, Action Queue | **DONE** | Migration 004 applied, frozen snapshot rule verified by mutation test, 18/18 tests passed. |
 | **Phase 3** | Call System, Telugu IVR, CallFlowEngine, Twilio Spike & Simulator | **DONE** | Migration 005 applied, 10 Telugu questions, pure state machine, audio gating, 24/24 tests passed (66/66 total). |
-| **Phase 4** | Weather Service, Open-Meteo Adapter, Alert Engine, SMS & Communication | **DONE** | Migration 006 applied, Open-Meteo live API, composite deduplication, NotificationService guardrails, 15/15 tests passed (81/81 total). |
-| **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | PENDING | Kc stage tracking, water-use ratio, anomaly rules, Recharts dashboard. |
+| **Phase 4** | Weather Service, Open-Meteo Adapter, Alert Engine, Voice & SMS Alerts | **DONE** | Migration 006 applied, Open-Meteo live API, composite deduplication, NotificationService guardrails (voice + SMS, strict opt-in consent, 09:00-18:00 voice quiet hours, max 1 call/day cap, possibility language, AGRI_PANCHAYAT scoping), 19/19 tests passed (85/85 total). |
+| **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | READY | Kc stage tracking, water-use ratio, anomaly rules, Recharts dashboard. |
 | **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | PENDING | PDFKit with Noto Sans Telugu, SHA-256 hash, public verification page. |
 | **Phase 7** | Hardening, Playwright E2E 22-Step Demo, Deployment Runbooks | PENDING | Full test suite, demo reset script, deployment guides for Vercel/Render. |
 
@@ -77,7 +77,7 @@
    - `alert_rules`: Configurable IMD and agronomic rules with JSONB thresholds (`RULE_RAIN_EXPECTED`, `RULE_HEAVY_RAIN`, `RULE_THUNDERSTORM`, `RULE_HIGH_TEMP`, `RULE_DRY_SPELL`).
    - `weather_alerts`: Generated alerts with composite deduplication key (`dedup_key = village_id:rule_code:target_date`), bilingual headlines, and suggested actions.
    - `message_templates`: DLT-compliant bilingual templates (`SMS_WEATHER_ALERT`, `SMS_CALL_REMINDER`, `SMS_CALL_FALLBACK`, `SMS_MANUAL_ADVISORY`).
-   - `communication_logs`: Append-only audit table logging every outbound SMS and voice attempt.
+   - `communication_logs`: Append-only audit table logging every outbound SMS and voice attempt (`channel` in `'voice'`, `'sms'`).
    - Row-level security (RLS) enabled deny-by-default across all 5 tables.
 2. **Meteorological Adapters (`modules/weather/adapters/`):**
    - `OpenMeteoAdapter`: Live forecast from Open-Meteo REST API (`Asia/Kolkata` timezone, FAO-56 reference $ET_0$, temperature, precipitation sum & probability, WMO code) with 8s abort timeout and archive fallback.
@@ -88,15 +88,17 @@
 4. **`AlertEngine` & Composite Deduplication (`modules/weather/AlertEngine.ts`):**
    - Evaluates forecast days against active threshold rules.
    - Idempotency guaranteed via composite key: `${village_id}:${rule_code}:${target_date}` with `ON CONFLICT (dedup_key) DO NOTHING`.
-   - Bilingual Telugu & English advice generator tailored for Andhra Pradesh farmers.
-   - Manual agricultural officer advisory publishing endpoint (`POST /api/v1/weather/alerts/manual`).
+   - **Possibility Language:** All headlines and advisories enforce strict probabilistic wording ("expected / possible / అవకాశం") rather than certainty.
+   - **Dry-Spell Scope:** Evaluates meteorological village dry spell (14+ dry days < 2.5mm + next 7 days forecast < 2.5mm); crop-stage agronomic moisture stress deferred to Phase 5 FAO-56 engine per DECISION-012.
+   - Manual agricultural officer advisory publishing endpoint (`POST /api/v1/weather/alerts/manual`) strictly scoped to officer's assigned villages (`user_scopes`).
 5. **`NotificationService` & Communication Guardrails (`modules/communication/NotificationService.ts`):**
+   - **Voice Alerts:** Pre-recorded Telugu voice alerts dispatched via `sendVoiceAlert` with DTMF acknowledgement and logged as `channel='voice'`.
+   - **Targeted Fan-Out:** Scoped strictly to farmers with an `active` season, an active primary contact, and explicit opt-in channel consent (`status = 'granted'`).
+   - **Opt-In Requirement:** Absence of consent record or withdrawn consent blocks transmission (`error_reason: 'NO_CONSENT'`).
    - **Kill Switch:** Obeys `COMMUNICATIONS_ENABLED` (status: `blocked`, error: `KILL_SWITCH_ACTIVE`).
-   - **Quiet Hours:** Restricts SMS to 07:00–21:00 IST (status: `blocked`, error: `QUIET_HOURS`).
-   - **Consent Check:** Checks `consents` table for active withdrawn SMS consent (status: `blocked`, error: `NO_CONSENT`).
-   - **Daily SMS Cap:** Restricts outbound SMS to max 2 per farmer per calendar day (status: `blocked`, error: `DAILY_CAP_EXCEEDED`).
+   - **Quiet Hours:** Restricts SMS to 07:00–21:00 IST; restricts voice calls to 09:00–18:00 IST (status: `blocked`, error: `QUIET_HOURS`).
+   - **Daily Caps:** Restricts outbound SMS to max 2/day, and voice calls to max 1 call attempt per farmer per calendar day (status: `blocked`, error: `DAILY_CAP_EXCEEDED`).
    - **Dry-Run Mode:** Supports `DRY_RUN=true` without calling third-party APIs.
-   - **Fan-Out Engine:** Broadcasts weather alerts and officer advisories to all registered village farmers with template token substitution and audit logging.
 
 #### Frontend Deliverables:
 1. **Interactive Weather & Alerts Hub (`/weather`):**
@@ -105,7 +107,7 @@
    - 7-Day interactive forecast cards displaying max/min temps, rainfall amount, precipitation probability, weather icons, and FAO-56 reference $ET_0$.
    - Active village alerts list with bilingual Telugu/English headlines, severity badges, and actionable guidance.
    - Modal dialog for Agricultural Officers and Admins to publish custom bilingual advisories with immediate farmer broadcast.
-   - Live append-only communication audit table showing status badges (`Sent`, `Blocked`, `Failed`), reasons, recipient phone, and timestamps.
+   - Live append-only communication audit table showing status badges (`Sent`, `Delivered`, `Blocked`, `Failed`), channel (`Voice`, `SMS`), reasons, recipient phone, and timestamps.
 
 ---
 
@@ -121,13 +123,13 @@
 | **Twilio Live Telephony** | Real Adapter + Spike Ready | Real adapter with TwiML and signature verification; runnable via `npm run twilio:spike`. |
 | **Weather Forecasts** | Real Open-Meteo Live API + Mock Fallback | Live Open-Meteo API with Asia/Kolkata timezone and FAO-56 ET0; deterministic mock fallback. |
 | **Alert Engine & Deduplication** | Real | Rule evaluation against IMD thresholds with composite key deduplication. |
-| **Communication & SMS** | Real NotificationService + Twilio Adapter | Full guardrail enforcement (consent, quiet hours, daily cap, kill switch). |
+| **Communication, Voice & SMS** | Real NotificationService + Telephony/SMS Adapters | Pre-recorded Telugu voice alerts + SMS; full guardrails (opt-in consent, quiet hours, daily caps, kill switch). |
 
 ---
 
 ### How to Run and Test Phase 4
 
-#### 1. Backend Automated Tests (81/81 tests passing):
+#### 1. Backend Automated Tests (85/85 tests passing across all phases):
 ```bash
 cd backend
 npm test

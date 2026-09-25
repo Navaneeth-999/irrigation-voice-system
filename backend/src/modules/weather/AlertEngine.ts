@@ -103,9 +103,9 @@ export class AlertEngine {
             if (day.precipitationSumMm >= minRain) {
               triggeredDay = day;
               alertContent = {
-                headlineEn: `Heavy Rainfall Warning for ${village.name}: ${day.precipitationSumMm}mm`,
-                headlineTe: `${village.name} కు భారీ వర్ష హెచ్చరిక: ${day.precipitationSumMm} మి.మీ`,
-                messageEn: `Warning: Severe precipitation (${day.precipitationSumMm}mm) forecast on ${day.date}. Risk of waterlogging and crop damage.`,
+                headlineEn: `Heavy Rainfall Possible in ${village.name}: ${day.precipitationSumMm}mm forecast`,
+                headlineTe: `${village.name} కు భారీ వర్ష సూచన: ${day.precipitationSumMm} మి.మీ అంచనా`,
+                messageEn: `Warning: Severe precipitation (${day.precipitationSumMm}mm) is possible on ${day.date}. Risk of field waterlogging and crop damage.`,
                 messageTe: `హెచ్చరిక: ${day.date} న భారీ వర్షం (${day.precipitationSumMm} మి.మీ) కురిసే అవకాశం ఉంది. పంట ముంపు ప్రమాదం ఉంది.`,
                 suggestedActionEn: 'Halt all irrigation immediately. Ensure field drainage channels are completely clear.',
                 suggestedActionTe: 'నీటిపారుదల వెంటనే నిలిపివేయండి. పొలంలో నీరు నిలవకుండా మురుగు కాల్వలు తెరవండి.',
@@ -125,9 +125,9 @@ export class AlertEngine {
             if (day.weatherCode != null && codes.includes(day.weatherCode)) {
               triggeredDay = day;
               alertContent = {
-                headlineEn: `Thunderstorm Advisory for ${village.name}`,
+                headlineEn: `Thunderstorm Possible in ${village.name}`,
                 headlineTe: `${village.name} కు ఉరుములు మెరుపులతో కూడిన వర్ష సూచన`,
-                messageEn: `Thunderstorm activity with strong winds forecast for ${day.date}.`,
+                messageEn: `Thunderstorm activity with strong winds is possible on ${day.date}.`,
                 messageTe: `${day.date} న ఉరుములు, మెరుపులు, ఈదురు గాలులతో కూడిన వర్షం పడే అవకాశం ఉంది.`,
                 suggestedActionEn: 'Stay clear of power lines and electrical pumps. Postpone foliar pesticide sprays.',
                 suggestedActionTe: 'విద్యుత్ మోటార్లు, స్తంభాల వద్ద జాగ్రత్తగా ఉండండి. పిచికారీ పనులు వాయిదా వేయండి.',
@@ -147,10 +147,10 @@ export class AlertEngine {
             if (day.tempMaxC != null && day.tempMaxC >= tempThreshold) {
               triggeredDay = day;
               alertContent = {
-                headlineEn: `High Temperature Alert for ${village.name}: ${day.tempMaxC}°C`,
-                headlineTe: `${village.name} కు అధిక ఉష్ణోగ్రత హెచ్చరిక: ${day.tempMaxC}°C`,
-                messageEn: `Intense heat condition (${day.tempMaxC}°C) predicted on ${day.date}. Evapotranspiration will peak.`,
-                messageTe: `${day.date} న అధిక ఎండలు (${day.tempMaxC}°C) నమోదయ్యే అవకాశం ఉంది. తేమ త్వరగా ఆరిపోతుంది.`,
+                headlineEn: `High Temperature Alert for ${village.name}: ${day.tempMaxC}°C expected`,
+                headlineTe: `${village.name} కు అధిక ఉష్ణోగ్రత హెచ్చరిక: ${day.tempMaxC}°C అంచనా`,
+                messageEn: `Intense heat condition (${day.tempMaxC}°C) is likely on ${day.date}. Evapotranspiration is expected to increase.`,
+                messageTe: `${day.date} న అధిక ఎండలు (${day.tempMaxC}°C) నమోదయ్యే అవకాశం ఉంది. నేలలో తేమ త్వరగా ఆరిపోయే అవకాశం ఉంది.`,
                 suggestedActionEn: 'Irrigate only during early morning or evening hours to avoid heavy evaporation losses.',
                 suggestedActionTe: 'భాష్పీభవనం తగ్గించడానికి ఉదయం 8 గంటల లోపు లేదా సాయంత్రం 5 గంటల తర్వాత మాత్రమే నీరు పెట్టండి.',
               };
@@ -180,8 +180,8 @@ export class AlertEngine {
             alertContent = {
               headlineEn: `Dry Spell Advisory for ${village.name}`,
               headlineTe: `${village.name} కు దీర్ఘకాలిక వర్షాభావ హెచ్చరిక`,
-              messageEn: `Extended dry spell observed (14+ dry days) with little to no rainfall expected in the coming week.`,
-              messageTe: `గత 14 రోజులుగా వర్షం లేకపోవడం మరియు రాబోయే వారం కూడా వర్షాలు లేకపోవడం గమనించబడింది.`,
+              messageEn: `Extended dry conditions observed (14+ dry days) with little to no rainfall expected in the coming week.`,
+              messageTe: `గత 14 రోజులుగా వర్షం లేకపోవడం మరియు రాబోయే వారం కూడా వర్షాలు కురిసే అవకాశం తక్కువగా ఉండటం గమనించబడింది.`,
               suggestedActionEn: 'Implement soil mulching and practice deficit / alternate furrow irrigation to preserve rootzone moisture.',
               suggestedActionTe: 'నేలలో తేమను కాపాడేందుకు మల్చింగ్ వాడండి మరియు పొదుపుగా విడతల వారీగా నీటిని అందించండి.',
             };

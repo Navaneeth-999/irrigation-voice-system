@@ -336,3 +336,37 @@ export const SYSTEM_VOICE_PROMPTS = {
     audioUrl: '/storage/audio/prompts/goodbye_te.mp3',
   },
 };
+
+export const ALERT_VOICE_PROMPTS = {
+  rain_expected: {
+    promptCode: 'prompt_alert_rain_expected',
+    teluguText: 'నమస్కారం రైతు సోదరులకు. జలమిత్ర వాతావరణ సమాచారం. రాబోయే 24 నుండి 48 గంటల్లో మీ ప్రాంతంలో వర్షం కురిసే అవకాశం ఉంది. నీరు వృధా కాకుండా నీటిపారుదల వాయిదా వేసుకోవాల్సిందిగా సూచిస్తున్నాము. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
+    englishText: 'Namaskaram farmer. Jalamitra weather advisory. Rain is expected in your area in the next 24 to 48 hours. Please postpone irrigation to conserve water. Press 1 to acknowledge.',
+    audioUrl: '/storage/audio/prompts/alert_rain_expected_te.mp3',
+  },
+  heavy_rain: {
+    promptCode: 'prompt_alert_heavy_rain',
+    teluguText: 'రైతులకు అత్యవసర హెచ్చరిక. రాబోయే 24 గంటల్లో మీ ప్రాంతంలో భారీ వర్షం కురిసే అవకాశం ఉంది. నీటిపారుదల వెంటనే నిలిపివేయండి మరియు పొలంలో మురుగు కాలువలు తెరవండి. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
+    englishText: 'Urgent warning for farmers. Heavy rainfall is possible in your area in the next 24 hours. Halt irrigation immediately and ensure field drainage channels are open. Press 1 to acknowledge.',
+    audioUrl: '/storage/audio/prompts/alert_heavy_rain_te.mp3',
+  },
+  thunderstorm: {
+    promptCode: 'prompt_alert_thunderstorm',
+    teluguText: 'రైతులకు హెచ్చరిక. మీ ప్రాంతంలో ఉరుములు మెరుపులతో కూడిన వర్షం పడే అవకాశం ఉంది. విద్యుత్ మోటార్లు మరియు స్తంభాల వద్ద జాగ్రత్తగా ఉండండి. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
+    englishText: 'Advisory for farmers. Thunderstorm with strong winds is possible. Avoid open pump areas and power transformers. Press 1 to acknowledge.',
+    audioUrl: '/storage/audio/prompts/alert_thunderstorm_te.mp3',
+  },
+  high_temperature: {
+    promptCode: 'prompt_alert_high_temp',
+    teluguText: 'వాతావరణ సమాచారం. రాబోయే రోజుల్లో అధిక ఎండలు నమోదయ్యే అవకాశం ఉంది. భాష్పీభవనం తగ్గించడానికి ఉదయం లేదా సాయంత్రం వేళల్లోనే నీరు అందించండి. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
+    englishText: 'Heat advisory. High temperatures are likely. Irrigate only during early morning or evening hours. Press 1 to acknowledge.',
+    audioUrl: '/storage/audio/prompts/alert_high_temp_te.mp3',
+  },
+  dry_spell: {
+    promptCode: 'prompt_alert_dry_spell',
+    teluguText: 'రైతులకు సూచన. దీర్ఘకాలిక వర్షాభావ పరిస్థితులు నెలకొనే అవకాశం ఉంది. నేలలో తేమను కాపాడటానికి మల్చింగ్ మరియు పొదుపు నీటిపారుదల పద్ధతులు పాటించండి. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
+    englishText: 'Dry spell advisory. Extended dry conditions are likely. Practice mulching and deficit irrigation to preserve soil moisture. Press 1 to acknowledge.',
+    audioUrl: '/storage/audio/prompts/alert_dry_spell_te.mp3',
+  },
+};
+

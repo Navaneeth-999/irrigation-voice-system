@@ -3,6 +3,7 @@ import {
   QUESTION_SPECS,
   buildPromptText,
   SYSTEM_VOICE_PROMPTS,
+  ALERT_VOICE_PROMPTS,
 } from '../modules/telephony/QuestionnaireConfig.js';
 
 export async function seedQuestionnaire(txOrDb: any = db) {
@@ -107,6 +108,22 @@ export async function seedQuestionnaire(txOrDb: any = db) {
         audio_url = EXCLUDED.audio_url,
         updated_at = NOW();
     `, [sp.promptCode, key, sp.teluguText, sp.englishText, sp.audioUrl || null]);
+  }
+
+  // 4. Insert Weather Alert Prompts
+  for (const [alertType, ap] of Object.entries(ALERT_VOICE_PROMPTS)) {
+    await txOrDb.query(`
+      INSERT INTO audio_prompts (
+        question_id, prompt_code, language_code, prompt_type,
+        text_content, english_meaning, audio_url, review_status
+      )
+      VALUES (NULL, $1, 'te', 'alert', $2, $3, $4, 'approved')
+      ON CONFLICT (prompt_code) DO UPDATE SET
+        text_content = EXCLUDED.text_content,
+        english_meaning = EXCLUDED.english_meaning,
+        audio_url = EXCLUDED.audio_url,
+        updated_at = NOW();
+    `, [ap.promptCode, ap.teluguText, ap.englishText, ap.audioUrl || null]);
   }
 
   console.log('✅ Telugu questionnaire & audio prompts successfully seeded.');

@@ -10,6 +10,18 @@ export interface SmsNotificationRequest {
   bypassQuietHours?: boolean;
 }
 
+export interface VoiceAlertRequest {
+  farmerId: string;
+  phone: string;
+  alertType: string;
+  promptCode: string;
+  teluguText: string;
+  englishText: string;
+  relatedAlertId?: string;
+  triggeredBy?: string;
+  bypassQuietHours?: boolean;
+}
+
 export interface NotificationResult {
   id: string;
   status: 'queued' | 'sent' | 'delivered' | 'failed' | 'blocked';
@@ -24,5 +36,9 @@ export interface FanOutSummary {
   eligibleFarmers: number;
   sentCount: number;
   blockedCount: number;
+  voiceSentCount?: number;
+  voiceBlockedCount?: number;
+  smsSentCount?: number;
+  smsBlockedCount?: number;
   failedCount: number;
 }

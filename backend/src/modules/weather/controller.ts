@@ -71,7 +71,20 @@ export async function createManualAdvisory(req: Request, res: Response) {
       });
     }
 
-    const userId = (req as any).user?.id;
+    const user = (req as any).user;
+    if (user?.role === 'AGRI_PANCHAYAT') {
+      const isAssigned = user.scopes?.some(
+        (s: any) => (s.scope_type === 'village' && s.scope_value === villageId) || s.scope_type === 'all'
+      );
+      if (!isAssigned) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: You are not assigned to this village.',
+        });
+      }
+    }
+
+    const userId = user?.id;
 
     const alert = await alertEngine.createManualAdvisory({
       villageId,

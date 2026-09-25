@@ -15,7 +15,7 @@ router.use(requireAuth);
 router.get('/villages/:villageId', getVillageWeather);
 router.post('/villages/:villageId/refresh', refreshVillageWeather);
 router.get('/alerts', listAlerts);
-router.post('/alerts/manual', requireRole('ADMIN', 'CSP_MEMBER'), createManualAdvisory);
+router.post('/alerts/manual', requireRole('ADMIN', 'CSP_MEMBER', 'AGRI_PANCHAYAT'), createManualAdvisory);
 router.post('/refresh-all', requireRole('ADMIN', 'CSP_MEMBER'), refreshAllVillages);
 
 export default router;
