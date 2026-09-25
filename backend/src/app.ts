@@ -24,6 +24,8 @@ import cropProgressRoutes from './modules/crop-progress/routes.js';
 import feedbackRoutes from './modules/feedback/routes.js';
 import actionItemsRoutes from './modules/action-items/routes.js';
 import { telephonyRouter, twilioWebhookRouter } from './modules/telephony/routes.js';
+import weatherRoutes from './modules/weather/routes.js';
+import communicationRoutes from './modules/communication/routes.js';
 
 export function createApp(): express.Application {
   const app = express();
@@ -100,6 +102,8 @@ export function createApp(): express.Application {
   apiRouter.use('/action-items', actionItemsRoutes);
   apiRouter.use('/telephony', telephonyRouter);
   apiRouter.use('/webhooks/twilio', twilioWebhookRouter);
+  apiRouter.use('/weather', weatherRoutes);
+  apiRouter.use('/communication', communicationRoutes);
 
   app.use('/api/v1', apiRouter);
 

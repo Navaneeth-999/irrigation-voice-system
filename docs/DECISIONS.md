@@ -93,3 +93,14 @@ This living document records significant technical and architectural decisions, 
   6. **Interactive Simulator Restriction:** Simulator calls are strictly restricted to demo farmers (`data_origin = 'demo'`). Real farmer records return HTTP 403 `SIMULATOR_DEMO_ONLY`.
   7. **Scheduler Locking on Real PostgreSQL:** Dual-mode database layer runs all unit tests in local PGlite. Scheduler concurrency locking verification against real PostgreSQL is held open pending the user's Supabase dev `DIRECT_DATABASE_URL`.
 
+---
+
+## DECISION-011: Daily Call Cap vs. Retry Interval & Window Expiry Guarantee
+- **Context:** Balancing timely agricultural feedback collection against caller fatigue, rural courtesy, and TRAI telecom compliance.
+- **Decision:**
+  1. **Daily Cap:** Maximum of 1 call attempt per farmer per calendar day. Even if a morning call goes unanswered or busy, the system will never redial the farmer on the same day.
+  2. **Retry Interval & Cadence:** Call retries (up to the configured maximum of 3 attempts) are distributed across subsequent days within the active due window (`due_window_start` to `due_window_end`).
+  3. **Window Expiry Guarantee:** Retries are strictly forbidden from firing past a schedule's due window end date (`cs.due_window_end >= CURRENT_DATE`). Once the window closes, any remaining uncompleted schedule is marked expired/failed, preventing stale data collection from contaminating subsequent fortnightly cycles.
+  4. **Phase 5 Anomaly Rule Semantics:** Confirmed that Phase 5's implausible-hours anomaly rule will inspect the raw farmer-reported total pump hours (`farmer_feedback.pump_hours` / `irrigation_records.raw_value`), evaluating whether values exceed physical fortnightly maximums (e.g. > 336 hours in a 14-day cycle or exceeding well recharge rates) before/during volume estimation.
+
+

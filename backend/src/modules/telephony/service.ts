@@ -570,6 +570,7 @@ export class TelephonyService {
          FROM call_schedule cs
          WHERE cs.status = 'scheduled'
            AND cs.scheduled_date <= CURRENT_DATE
+           AND cs.due_window_end >= CURRENT_DATE
            AND cs.attempt_count < cs.max_attempts
            -- Consent check: Farmer must not have active withdrawn consent for voice
            AND NOT EXISTS (
