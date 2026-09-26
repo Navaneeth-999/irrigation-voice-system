@@ -112,12 +112,50 @@ export async function getDashboardKPIs(req: Request, res: Response): Promise<voi
 
 export class AnalyticsController {
   /**
+   * Helper: Validates that an AGRI_PANCHAYAT user only accesses seasons within assigned villages.
+   */
+  private async checkVillageAccess(user: any, seasonId: string): Promise<{ authorized: boolean; notFound?: boolean }> {
+    const seasonRes = await db.query(
+      `SELECT s.id, f.village_id 
+       FROM seasons s 
+       JOIN farmers f ON f.id = s.farmer_id 
+       WHERE s.id = $1`,
+      [seasonId]
+    );
+
+    if (seasonRes.rows.length === 0) {
+      return { authorized: false, notFound: true };
+    }
+
+    const scopedVillages = getScopedVillageFilter(user);
+    if (scopedVillages !== null) {
+      const seasonVillageId = seasonRes.rows[0].village_id;
+      if (!scopedVillages.includes(seasonVillageId)) {
+        return { authorized: false, notFound: false };
+      }
+    }
+
+    return { authorized: true };
+  }
+
+  /**
    * GET /api/v1/analytics/seasons/:seasonId
    * Retrieves full seasonal analytics, water balance, WUR band, and confidence score.
    */
   async getSeasonAnalytics(req: Request, res: Response): Promise<void> {
     try {
       const seasonId = req.params.seasonId as string;
+      const access = await this.checkVillageAccess(req.user, seasonId);
+
+      if (access.notFound) {
+        res.status(404).json({ success: false, error: `Season with ID ${seasonId} not found` });
+        return;
+      }
+      if (!access.authorized) {
+        res.status(403).json({ success: false, error: 'Forbidden: Access to season outside assigned village scope' });
+        return;
+      }
+
       const data = await analyticsService.getSeasonAnalytics(seasonId);
       res.status(200).json({ success: true, data });
     } catch (err: any) {
@@ -136,6 +174,17 @@ export class AnalyticsController {
   async recalculateSeason(req: Request, res: Response): Promise<void> {
     try {
       const seasonId = req.params.seasonId as string;
+      const access = await this.checkVillageAccess(req.user, seasonId);
+
+      if (access.notFound) {
+        res.status(404).json({ success: false, error: `Season with ID ${seasonId} not found` });
+        return;
+      }
+      if (!access.authorized) {
+        res.status(403).json({ success: false, error: 'Forbidden: Access to season outside assigned village scope' });
+        return;
+      }
+
       await analyticsService.computeSeasonDailyBalance(seasonId);
       const metrics = await analyticsService.recalculateSeasonWaterMetrics(seasonId);
       res.status(200).json({ success: true, data: metrics });

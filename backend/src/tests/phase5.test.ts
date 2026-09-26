@@ -375,4 +375,114 @@ describe('Phase 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence
       expect(remainingRes.rows[0].count).toBe(0);
     });
   });
+
+  describe('8. Directives Verification: Bund Height, Configurable Assumptions & Village Scoping', () => {
+    it('confirms bund-overflow parameter is flagged unvalidated=false in Paddy ponding model', async () => {
+      const paddyParams = await paddyPondingModel.getPaddyParams(
+        (await db.query(`SELECT id FROM crops WHERE name = 'Paddy (Rice)'`)).rows[0].id
+      );
+      expect(paddyParams.bundHeightMm).toBe(100);
+      expect(paddyParams.bundHeightVerified).toBe(false);
+
+      const dayBalance = paddyPondingModel.calculateDayBalance(
+        10,
+        { order: 1, name: 'Land Prep', nameTe: 'దమ్ము', startDas: 0, endDas: 20, kc: 1.10, kcSource: 'FAO-56', kcVerified: false },
+        1.10,
+        20.0,
+        5.0,
+        15.0,
+        25.0,
+        paddyParams
+      );
+      expect(dayBalance.unvalidatedParams.some(p => p.includes('Paddy Bund Height & Overflow Threshold'))).toBe(true);
+    });
+
+    it('confirms WUR band thresholds and anomaly operational ceiling are stored as configurable assumptions and tracked', async () => {
+      // 1. Seed custom app settings for WUR bands
+      await db.query(
+        `INSERT INTO app_settings (key, value, description)
+         VALUES ('wur_band_thresholds', '{"lower_band_edge": 0.80, "upper_band_edge": 1.30, "is_verified": false, "source": "District Water Audit Baseline"}'::jsonb, 'Custom WUR bands')
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`
+      );
+
+      waterUseRatioEngine.clearCache();
+      const wurConfig = await waterUseRatioEngine.getThresholdsConfig();
+      expect(wurConfig.lowerBandEdge).toBe(0.80);
+      expect(wurConfig.upperBandEdge).toBe(1.30);
+      expect(wurConfig.isVerified).toBe(false);
+
+      const evalResult = waterUseRatioEngine.evaluateRatio(82, 100, wurConfig);
+      expect(evalResult.band).toBe('near_estimate');
+      expect(evalResult.unvalidatedAssumption).toContain('Water Use Ratio qualitative bands');
+
+      // 2. Anomaly thresholds
+      anomalyEngine.clearCache();
+      const anomalyConfig = await anomalyEngine.getThresholdsConfig();
+      expect(anomalyConfig.operationalCeilingHours).toBe(280);
+      expect(anomalyConfig.isVerified).toBe(false);
+    });
+
+    it('enforces AGRI_PANCHAYAT village scoping on GET and POST analytics endpoints (blocks cross-village access)', async () => {
+      // 1. Create a second village
+      const v2Res = await db.query(
+        `INSERT INTO villages (name, mandal, district, gram_panchayat, latitude, longitude)
+         VALUES ('East Delta Village', 'Amalapuram', 'Konaseema', 'East GP', 16.57, 82.00)
+         RETURNING id`
+      );
+      const village2Id = v2Res.rows[0].id;
+
+      // 2. Create AGRI_PANCHAYAT user assigned ONLY to village2Id
+      const officerEmail = 'officer.delta@csp-irrigation.org';
+      const userRes = await request(app)
+        .post('/api/v1/users')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          name: 'Officer Delta',
+          email: officerEmail,
+          password: 'OfficerPassword123!',
+          role: 'AGRI_PANCHAYAT',
+        });
+      expect(userRes.status).toBe(201);
+      const officerId = userRes.body.data.id;
+
+      // Assign scope strictly to village2Id
+      await request(app)
+        .put(`/api/v1/users/${officerId}/scopes`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          scopes: [
+            { scope_type: 'village', scope_value: village2Id },
+          ],
+        });
+
+      // Login as officer
+      const offLogin = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          email: officerEmail,
+          password: 'OfficerPassword123!',
+        });
+      expect(offLogin.status).toBe(200);
+      const officerCookies = offLogin.headers['set-cookie'];
+      const officerCookie = Array.isArray(officerCookies) ? officerCookies.join('; ') : officerCookies;
+
+      // Attempt to access paddySeasonId (which belongs to villageId, NOT village2Id)
+      const getRes = await request(app)
+        .get(`/api/v1/analytics/seasons/${paddySeasonId}`)
+        .set('Cookie', officerCookie);
+      expect(getRes.status).toBe(403);
+      expect(getRes.body.error).toContain('outside assigned village scope');
+
+      // Attempt to recalculate paddySeasonId
+      const postRes = await request(app)
+        .post(`/api/v1/analytics/seasons/${paddySeasonId}/recalculate`)
+        .set('Cookie', officerCookie)
+        .set('X-Requested-With', 'XMLHttpRequest');
+      expect(postRes.status).toBe(403);
+      expect(postRes.body.error).toContain('outside assigned village scope');
+    });
+  });
 });

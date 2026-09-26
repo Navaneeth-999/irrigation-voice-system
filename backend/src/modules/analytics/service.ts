@@ -277,10 +277,12 @@ export class AnalyticsService {
     const totalAppliedM3 = waterUseRatioEngine.litresToCubicMeters(totalAppliedLitres);
 
     // 2. Evaluate WUR Non-Competitive Band
-    const wurEval = waterUseRatioEngine.evaluateRatio(totalAppliedM3, netIrrigationDemandM3);
+    const wurConfig = await waterUseRatioEngine.getThresholdsConfig();
+    const wurEval = waterUseRatioEngine.evaluateRatio(totalAppliedM3, netIrrigationDemandM3, wurConfig);
 
     // 3. Scan for Anomalies
-    const anomalyFlags = await anomalyEngine.scanSeasonAnomalies(seasonId);
+    const anomalyConfig = await anomalyEngine.getThresholdsConfig();
+    const anomalyFlags = await anomalyEngine.scanSeasonAnomalies(seasonId, anomalyConfig);
 
     // 4. Compute Data Confidence Score
     const confidence = await dataConfidenceService.computeConfidenceScore(seasonId);
@@ -293,6 +295,16 @@ export class AnalyticsService {
       [seasonId]
     );
     const unvalidatedList = unvalidatedParamsRes.rows.map(r => r.param);
+
+    if (wurEval.unvalidatedAssumption && !unvalidatedList.includes(wurEval.unvalidatedAssumption)) {
+      unvalidatedList.push(wurEval.unvalidatedAssumption);
+    }
+    if (anomalyConfig && !anomalyConfig.isVerified) {
+      const anomalyAssumption = `Fortnightly operational pump ceiling (${anomalyConfig.operationalCeilingHours}h) based on unverified rural power roster (${anomalyConfig.source})`;
+      if (!unvalidatedList.includes(anomalyAssumption)) {
+        unvalidatedList.push(anomalyAssumption);
+      }
+    }
 
     const metricsRecord: SeasonWaterMetrics = {
       seasonId,

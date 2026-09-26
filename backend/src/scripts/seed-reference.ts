@@ -98,6 +98,7 @@ export async function seedReferenceData() {
       { key: 'puddling_water_mm', value: 200, unit: 'mm', source: 'ICAR Baseline', verified: false, notes: 'Land soaking & puddling water requirement' },
       { key: 'percolation_rate_mm_day', value: 4.0, unit: 'mm/day', source: 'APAU Sandy-Clay Loam Estimate', verified: false, notes: 'Estimated daily deep percolation' },
       { key: 'target_ponding_depth_mm', value: 40, unit: 'mm', source: 'Agronomic Practice Guideline', verified: false, notes: 'Standard ponding water depth' },
+      { key: 'bund_height_mm', value: 100, unit: 'mm', source: 'Field Agronomy Bund Baseline', verified: false, notes: 'Perimeter field bund height & overflow spillway' },
     ];
 
     await tx.query('DELETE FROM crop_model_parameters WHERE crop_id = $1', [paddyId]);

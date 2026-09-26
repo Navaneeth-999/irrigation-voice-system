@@ -9,6 +9,7 @@ export interface PaddyParams {
   puddlingVerified: boolean;
   percolationVerified: boolean;
   targetDepthVerified: boolean;
+  bundHeightVerified: boolean;
 }
 
 export interface PaddyDailyResult {
@@ -72,6 +73,7 @@ export class PaddyPondingModel {
       puddlingVerified: paramMap.get('puddling_water_mm')?.verified ?? false,
       percolationVerified: paramMap.get('percolation_rate_mm_day')?.verified ?? false,
       targetDepthVerified: paramMap.get('target_ponding_depth_mm')?.verified ?? false,
+      bundHeightVerified: paramMap.get('bund_height_mm')?.verified ?? false,
     };
   }
 
@@ -103,6 +105,9 @@ export class PaddyPondingModel {
     }
     if (!params.targetDepthVerified) {
       unvalidatedParams.push(`Target Ponding Depth (${params.targetPondingDepthMm} mm)`);
+    }
+    if (!params.bundHeightVerified) {
+      unvalidatedParams.push(`Paddy Bund Height & Overflow Threshold (${params.bundHeightMm} mm)`);
     }
     if (!efficiencyVerified) {
       unvalidatedParams.push(`Irrigation Efficiency (${Math.round(irrigationEfficiency * 100)}%)`);
