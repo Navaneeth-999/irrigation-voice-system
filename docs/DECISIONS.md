@@ -132,6 +132,14 @@ This living document records significant technical and architectural decisions, 
      - `weather_alerts`: Notification fan-out processing (`notification_status = 'pending'`).
      - `analytics_processing_queue`: Daily $ET_c$ and fortnightly water-balance aggregation batch jobs.
 
+---
 
-
-
+## DECISION-014: Seasonal Conservation Certificates, Cryptographic Snapshots, Telugu PDFKit & Public Verification
+- **Context:** Establishing the architecture for seasonal closing rules, immutable snapshot serialization, cryptographic SHA-256 integrity, bilingual PDF certificate rendering, and public verification for Phase 6.
+- **Decision:**
+  1. **Season Closing & Completion Workflow:** A season can only be completed from `active` or `monitoring` status (draft and cancelled seasons are strictly rejected). Actual harvest date must be on or after sowing date and cannot be in the future. Final recalculations of daily balances and water metrics are committed before creating the certificate.
+  2. **Canonical JSON Serialization & Deterministic SHA-256 Hash:** The certificate snapshot (`snapshot_data`) captures the complete state of the season, farmer, plot, crop, weather aggregates, irrigation logs, feedback cycles, final water metrics, and unvalidated assumptions list. Snapshot serialization recursively sorts all keys to guarantee deterministic stringification. The SHA-256 hash is computed directly over this canonical string (`crypto.createHash('sha256').update(canonicalJson).digest('hex')`). Any tampering with a single character in the snapshot causes the real-time hash verification to fail.
+  3. **Assumption Transparency on Official Certificates:** If any agronomic parameter (FAO-56 $K_c$, paddy ponding depth, bund overflow threshold, operational pump ceiling) was based on unvalidated assumptions, the certificate must prominently display an amber disclaimer box listing each unverified parameter in clear text.
+  4. **Bilingual PDFKit Generation with Noto Sans Telugu:** Certificates are generated using PDFKit (A4 Landscape) embedding `NotoSansTelugu-Regular.ttf` and `NotoSansTelugu-Bold.ttf` for pristine native Telugu typography alongside English. Every certificate embeds a high-resolution QR code pointing to the public verification URL.
+  5. **Public Verification Portal (No Authentication Required):** The route `GET /api/v1/certificates/verify/:code` and web page `/verify/:code` are public to allow any community member, panchayat officer, or buyer to verify the certificate without login. It dynamically recomputes the SHA-256 hash of the stored snapshot in real time to verify mathematical integrity.
+  6. **Administrative Revocation:** Only users with `ADMIN` role can revoke a certificate, requiring an audit reason, immediately updating the public verification registry to flag `isRevoked: true` and `isValid: false`.

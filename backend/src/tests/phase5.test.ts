@@ -386,7 +386,7 @@ describe('Phase 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence
 
       const dayBalance = paddyPondingModel.calculateDayBalance(
         10,
-        { order: 1, name: 'Land Prep', nameTe: 'దమ్ము', startDas: 0, endDas: 20, kc: 1.10, kcSource: 'FAO-56', kcVerified: false },
+        { id: 'stage-1', stageOrder: 1, name: 'Land Prep', nameTe: 'దమ్ము', startDas: 0, endDas: 20, kc: 1.10, kcSource: 'FAO-56', kcVerified: false },
         1.10,
         20.0,
         5.0,

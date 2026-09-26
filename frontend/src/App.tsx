@@ -26,12 +26,14 @@ import { WeatherAlertsPage } from './pages/WeatherAlertsPage.js';
 // Phase 5 Page
 import { AnalyticsPage } from './pages/AnalyticsPage.js';
 
+// Phase 6 Pages
+import { CertificatesPage } from './pages/CertificatesPage.js';
+import { PublicVerificationPage } from './pages/PublicVerificationPage.js';
+
 // Subsequent Phase Pages (Placeholders)
 import {
-  CertificatesPage,
   SettingsPage,
   AuditPage,
-  PublicVerifyPage,
 } from './pages/PhasePlaceholders.js';
 
 const queryClient = new QueryClient({
@@ -52,7 +54,8 @@ export const App: React.FC = () => {
           <Routes>
             {/* Public Routes */}
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/verify/:certificateNumber" element={<PublicVerifyPage />} />
+            <Route path="/verify/:code" element={<PublicVerificationPage />} />
+            <Route path="/verify/:certificateNumber" element={<PublicVerificationPage />} />
 
             {/* Protected Routes inside AppLayout */}
             <Route

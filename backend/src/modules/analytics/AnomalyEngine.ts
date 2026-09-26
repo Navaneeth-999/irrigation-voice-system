@@ -217,7 +217,7 @@ export class AnomalyEngine {
           anomalyFlags.push(flag);
           await this.recordActionItem(
             seasonId,
-            'warning',
+            'medium',
             `Date ${b.record_date}: ${rainCheck.description}`,
             rainCheck.suggestedAction || 'Check drainage'
           );

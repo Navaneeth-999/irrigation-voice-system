@@ -26,6 +26,7 @@ import actionItemsRoutes from './modules/action-items/routes.js';
 import { telephonyRouter, twilioWebhookRouter } from './modules/telephony/routes.js';
 import weatherRoutes from './modules/weather/routes.js';
 import communicationRoutes from './modules/communication/routes.js';
+import certificatesRoutes from './modules/certificates/routes.js';
 
 export function createApp(): express.Application {
   const app = express();
@@ -104,6 +105,7 @@ export function createApp(): express.Application {
   apiRouter.use('/webhooks/twilio', twilioWebhookRouter);
   apiRouter.use('/weather', weatherRoutes);
   apiRouter.use('/communication', communicationRoutes);
+  apiRouter.use('/certificates', certificatesRoutes);
 
   app.use('/api/v1', apiRouter);
 

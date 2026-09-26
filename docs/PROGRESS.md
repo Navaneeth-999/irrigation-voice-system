@@ -1,8 +1,8 @@
 # Project Development Progress (`docs/PROGRESS.md`)
 
 ## Status Overview
-- Current Phase: **PHASE 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence (COMPLETED & VERIFIED)**
-- Next Phase: **PHASE 6: Reports, Certificates, Immutable Snapshots, QR Verification**
+- Current Phase: **PHASE 6: Reports, Certificates, Immutable Snapshots, QR Verification (COMPLETED & VERIFIED)**
+- Next Phase: **PHASE 7: System Hardening, Playwright E2E 22-Step Demo Script & Production Deployment Runbooks**
 - Last Updated: 2026-09-26
 
 ---
@@ -16,8 +16,8 @@
 | **Phase 2** | Seasons, Snapshots, Irrigation Records, Feedback, Action Queue | **DONE** | Migration 004 applied, frozen snapshot rule verified by mutation test, 18/18 tests passed. |
 | **Phase 3** | Call System, Telugu IVR, CallFlowEngine, Twilio Spike & Simulator | **DONE** | Migration 005 applied, 10 Telugu questions, pure state machine, audio gating, 24/24 tests passed (66/66 total). |
 | **Phase 4** | Weather Service, Open-Meteo Adapter, Alert Engine, Voice & SMS Alerts | **DONE** | Migration 006 applied, Open-Meteo live API, composite deduplication, NotificationService guardrails (voice + SMS, strict opt-in consent, 09:00-18:00 voice quiet hours, max 1 call/day cap, possibility language, AGRI_PANCHAYAT scoping), 19/19 tests passed (85/85 total). |
-| **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | **DONE** | Migration 007 applied, FAO-56 engine, configurable USDA-SCS effective rainfall, paddy ponding balance, indicative qualitative WUR bands (no leaderboards), 336-hour fortnight anomaly reasoning, 4-pillar data confidence scoring, Recharts balance graph, 16/16 tests passed (101/101 total). |
-| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | READY | PDFKit with Noto Sans Telugu, SHA-256 hash, public verification page. |
+| **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | **DONE** | Migration 007 applied, FAO-56 engine, configurable USDA-SCS effective rainfall, paddy ponding balance, indicative qualitative WUR bands (no leaderboards), 336-hour fortnight anomaly reasoning, 4-pillar data confidence scoring, Recharts balance graph, 19/19 tests passed (104/104 total). |
+| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | **DONE** | Migration 008 applied, canonical JSON serialization, deterministic SHA-256 hash, PDFKit with Noto Sans Telugu, QR code generation, public verification portal, 13/13 tests passed (117/117 total). |
 | **Phase 7** | Hardening, Playwright E2E 22-Step Demo, Deployment Runbooks | PENDING | Full test suite, demo reset script, deployment guides for Vercel/Render. |
 
 ---
@@ -158,6 +158,52 @@
 
 ---
 
+### Phase 6 Deliverables & Verifications
+
+#### Backend Deliverables:
+1. **Conservation Certificates Schema Migration (`008_conservation_certificates.sql`):**
+   - `certificates` table: `id`, `certificate_code` (`JALAMITRA-YYYY-XXXXX`), `season_id`, `farmer_id`, `plot_id`, `crop_id`, `water_use_ratio`, `water_use_ratio_band`, `confidence_score`, `confidence_band`, `estimated_water_saved_litres`, `actual_harvest_date`, `yield_quantity`, `yield_unit`, `snapshot_data JSONB`, `sha256_hash`, `pdf_path`, `verification_token`, `is_revoked`, `revocation_reason`, `created_at`.
+   - Enhanced `seasons` table with harvest completion tracking (`actual_harvest_date`, `actual_yield_quantity`, `actual_yield_unit`, `completion_notes`).
+   - Row-level security (RLS) enabled deny-by-default on `certificates`.
+2. **Deterministic Cryptographic Snapshot Service (`modules/certificates/SnapshotService.ts`):**
+   - Constructs canonical JSON snapshots across farmer, plot, crop, weather, daily balances, water metrics, and unvalidated assumptions.
+   - Recursive key sorting ensures identical deterministic output regardless of database serialization order.
+   - Computes deterministic SHA-256 hash with tamper verification (`verifyIntegrity`).
+3. **Bilingual PDFKit Certificate Generator (`modules/certificates/PdfCertificateService.ts`):**
+   - Generates landscape A4 bilingual conservation certificates.
+   - Embedded standalone TrueType Telugu fonts (`NotoSansTelugu-Regular.ttf` and `NotoSansTelugu-Bold.ttf`) in `backend/assets/fonts/`.
+   - Embeds QR code pointing directly to public verification URL `/verify/:code`.
+   - Displays Water Use Ratio qualitative band, 4-pillar data confidence score, SHA-256 seal, and prominent unvalidated assumptions disclosure box.
+4. **Certificate Service & Harvest Closing Rules (`modules/certificates/service.ts`):**
+   - Enforces strict season closing rules: cannot complete draft or cancelled seasons; harvest date cannot be future or prior to sowing date.
+   - Executes final water balance recalculation and seals immutable snapshot.
+   - Updates season state to `completed`.
+   - Implements administrative revocation with mandatory audit rationale.
+5. **Public & Authenticated Endpoints (`modules/certificates/routes.ts`):**
+   - Public: `GET /api/v1/certificates/verify/:code` (open to public without auth, returns verified status, farmer initials/village, crop, WUR band, confidence, SHA-256 hash, and assumptions).
+   - Authenticated: `GET /api/v1/certificates` (with AGRI_PANCHAYAT village scoping), `GET /:id`, `GET /:id/pdf`, `POST /seasons/:seasonId/issue`, `POST /:id/revoke` (ADMIN only).
+
+#### Frontend Deliverables:
+1. **Public Verification Portal (`/verify/:code`):**
+   - Publicly accessible page with zero authentication required.
+   - Green verified checkmark badge with certificate code.
+   - Tamper-evident cryptographic SHA-256 hash display.
+   - Bilingual farmer, village, plot, crop, and season details.
+   - Indicative qualitative Water Use Ratio badge and 4-Pillar Data Confidence breakdown.
+   - Prominent amber Unvalidated Assumptions transparency card.
+   - Clear revocation notice banner when a certificate has been revoked.
+2. **Authenticated Certificates Hub (`/certificates`):**
+   - KPI metrics cards: Total Issued, Near Estimate Ratio, Avg Confidence, Active vs Revoked.
+   - Search and filter bar by code, farmer, village, or status.
+   - Certificate table with PDF download and public verification link.
+   - Admin-only Revocation Modal with mandatory reason requirement.
+3. **Harvest Completion & Certificate Issuance Flow (`/seasons/:id`):**
+   - Updated harvest completion modal on `SeasonDetailPage` collecting actual harvest date, yield, and completion notes.
+   - Automatically issues cryptographic certificate and transitions season to `completed`.
+   - Added direct "View Conservation Certificate" action button on completed seasons.
+
+---
+
 ### Real vs Mock Status
 
 | Component | Current State | Notes |
@@ -173,12 +219,13 @@
 | **Communication, Voice & SMS** | Real NotificationService + Telephony/SMS Adapters | Pre-recorded Telugu voice alerts + SMS; full guardrails (opt-in consent, quiet hours, daily caps, kill switch). |
 | **Water Balance & FAO-56 Engine** | Real | FAO-56 dual/single Kc, USDA-SCS effective rainfall, paddy ponding balance model, and confidence scoring. |
 | **Row Locking & Concurrency Queue**| Real PostgreSQL Pattern | `FOR UPDATE SKIP LOCKED` across call dispatch, weather alerts, and analytics queue (`npm run test:locking`). |
+| **Conservation Certificates** | Real | Immutable snapshots, canonical JSON SHA-256 seal, PDFKit with Noto Sans Telugu, and public verification portal. |
 
 ---
 
-### How to Run and Test Phase 5
+### How to Run and Test Phase 6
 
-#### 1. Backend Automated Tests (101/101 tests passing across all phases):
+#### 1. Backend Automated Tests (117/117 tests passing across all 6 phases):
 ```bash
 cd backend
 npm test
@@ -197,5 +244,7 @@ npm run dev --prefix backend
 # Terminal 2: Frontend
 npm run dev --prefix frontend
 ```
-Navigate to `http://localhost:5173/analytics` to view the FAO-56 water balance, data confidence scores, and indicative Water Use Ratio.
+Navigate to:
+- `http://localhost:5173/certificates` to view issued conservation certificates and download PDFs.
+- `http://localhost:5173/verify/JALAMITRA-2026-00001` to test the public verification portal.
 

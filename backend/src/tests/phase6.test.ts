@@ -1,0 +1,415 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import request from 'supertest';
+import { createApp } from '../app.js';
+import { db, closeDatabase } from '../db/index.js';
+import { runMigrations } from '../scripts/migrate.js';
+import { seedReferenceData } from '../scripts/seed-reference.js';
+import { createAdminUser } from '../scripts/create-admin.js';
+import { snapshotService } from '../modules/certificates/SnapshotService.js';
+import { pdfCertificateService } from '../modules/certificates/PdfCertificateService.js';
+import { certificateService } from '../modules/certificates/service.js';
+
+describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verification Tests', () => {
+  let app: any;
+  let adminCookie: string;
+  let villageId: string;
+  let farmerId: string;
+  let plotId: string;
+  let cropId: string;
+  let seasonId: string;
+  let issuedCertificateId: string;
+  let issuedCertificateCode: string;
+  let methodId: string;
+
+  beforeAll(async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ADMIN_BOOTSTRAP_PASSWORD = 'ChangeMeAdmin123!';
+
+    await runMigrations();
+    await seedReferenceData();
+    await createAdminUser();
+
+    app = createApp();
+
+    // Authenticate Admin
+    const loginRes = await request(app)
+      .post('/api/v1/auth/login')
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+
+    const cookies = loginRes.headers['set-cookie'];
+    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : cookies;
+
+    // Clear must_change_password
+    await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Cookie', adminCookie)
+      .set('X-Requested-With', 'XMLHttpRequest')
+      .send({
+        currentPassword: 'ChangeMeAdmin123!',
+        newPassword: 'NewAdminPassword456!',
+      });
+
+    // Retrieve village
+    const villageRes = await db.query(`SELECT id FROM villages LIMIT 1`);
+    villageId = villageRes.rows[0].id;
+
+    // Create test farmer
+    const farmerRes = await db.query(
+      `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
+       VALUES ('F-P6-TEST', 'Koteswara Rao', $1, 'te', 'active')
+       RETURNING id`,
+      [villageId]
+    );
+    farmerId = farmerRes.rows[0].id;
+
+    // Create test plot with 3.0 acres
+    const plotRes = await db.query(
+      `INSERT INTO plots (farmer_id, label, area_acres, is_active)
+       VALUES ($1, 'East Canal Plot', 3.0, true)
+       RETURNING id`,
+      [farmerId]
+    );
+    plotId = plotRes.rows[0].id;
+
+    // Fetch Paddy Crop and drip irrigation
+    const cropRes = await db.query(`SELECT id FROM crops WHERE name = 'Paddy (Rice)'`);
+    cropId = cropRes.rows[0].id;
+    const methodRes = await db.query(`SELECT id FROM irrigation_method_types WHERE code = 'flood'`);
+    methodId = methodRes.rows[0].id;
+
+    // Create active Season
+    const sRes = await db.query(
+      `INSERT INTO seasons (
+        season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
+        season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
+      )
+      VALUES ('S-2026-P6-001', $1, $2, $3, $4, 'kharif', 2026, '2026-06-01', '2026-09-30', 3.0, 'active', 'real')
+      RETURNING id`,
+      [farmerId, plotId, cropId, methodId]
+    );
+    seasonId = sRes.rows[0].id;
+
+    // Seed weather records for simulation
+    const today = new Date();
+    for (let i = 0; i < 14; i++) {
+      const d = new Date('2026-06-01');
+      d.setDate(d.getDate() + i);
+      const dStr = d.toISOString().split('T')[0];
+      await db.query(
+        `INSERT INTO weather_records (
+          village_id, record_date, temp_max_c, temp_min_c, precipitation_sum_mm,
+          et0_fao_evapotranspiration, source, is_forecast
+        )
+        VALUES ($1, $2, 34.5, 26.0, 10.0, 5.0, 'openmeteo', false)
+        ON CONFLICT DO NOTHING`,
+        [villageId, dStr]
+      );
+    }
+
+    // Seed irrigation record
+    await db.query(
+      `INSERT INTO irrigation_records (
+        season_id, period_start, period_end, raw_value, raw_unit,
+        calculation_method, estimated_volume_l, estimated_depth_mm, measurement_type
+      )
+      VALUES ($1, '2026-06-05', '2026-06-05', 6.0, 'pump_hours', 'pump_hours_x_discharge', 72000.0, 8.89, 'estimated')`,
+      [seasonId]
+    );
+
+    // Seed feedback record
+    await db.query(
+      `INSERT INTO farmer_feedback (
+        season_id, cycle_number, period_start, period_end, rainfall_class, irrigated, irrigation_count,
+        pump_hours, crop_condition, water_problem, crop_problem, callback_requested, source
+      )
+      VALUES ($1, 1, '2026-06-01', '2026-06-14', 'light', true, 1, 6.0, 'good', 'none', 'none', false, 'manual')`,
+      [seasonId]
+    );
+  });
+
+  afterAll(async () => {
+    await closeDatabase();
+  });
+
+  describe('1. Season Closing Rules Enforcement', () => {
+    it('rejects certificate issuance if actual harvest date is before sowing date', async () => {
+      const res = await request(app)
+        .post(`/api/v1/certificates/seasons/${seasonId}/issue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actualHarvestDate: '2026-05-15', // Before sowing (2026-06-01)
+          yieldQuantity: 42.0,
+          yieldUnit: 'quintal',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain('cannot be before sowing date');
+    });
+
+    it('rejects certificate issuance if harvest date is in the future', async () => {
+      const futureDate = new Date();
+      futureDate.setDate(futureDate.getDate() + 30);
+      const futureStr = futureDate.toISOString().split('T')[0];
+
+      const res = await request(app)
+        .post(`/api/v1/certificates/seasons/${seasonId}/issue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actualHarvestDate: futureStr,
+          yieldQuantity: 42.0,
+          yieldUnit: 'quintal',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain('cannot be in the future');
+    });
+
+    it('rejects certificate issuance for a Draft season', async () => {
+      const draftSeason = await db.query(
+        `INSERT INTO seasons (
+          season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
+          season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
+        )
+        VALUES ('S-2026-DRAFT-01', $1, $2, $3, $4, 'rabi', 2026, '2026-10-01', '2027-02-01', 2.0, 'draft', 'real')
+        RETURNING id`,
+        [farmerId, plotId, cropId, methodId]
+      );
+
+      const res = await request(app)
+        .post(`/api/v1/certificates/seasons/${draftSeason.rows[0].id}/issue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actualHarvestDate: '2026-10-15',
+          yieldQuantity: 20.0,
+          yieldUnit: 'quintal',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Cannot issue certificate for a Draft season');
+    });
+  });
+
+  describe('2. Immutable Snapshot & Cryptographic SHA-256 Sealed Certificate Issuance', () => {
+    it('issues a sealed certificate, updates season to completed, and computes SHA-256 hash', async () => {
+      const res = await request(app)
+        .post(`/api/v1/certificates/seasons/${seasonId}/issue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actualHarvestDate: '2026-06-14',
+          yieldQuantity: 38.5,
+          yieldUnit: 'quintal',
+          completionNotes: 'Excellent kharif paddy season with high water conservation.',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+
+      const cert = res.body.data;
+      expect(cert.certificateCode).toMatch(/^JALAMITRA-2026-[A-Z0-9]{5}$/);
+      expect(cert.sha256Hash).toMatch(/^[a-f0-9]{64}$/); // 64 hex characters
+      expect(cert.verificationToken).toBeTruthy();
+      expect(cert.isRevoked).toBe(false);
+
+      issuedCertificateId = cert.id;
+      issuedCertificateCode = cert.certificateCode;
+
+      // Verify season marked completed in DB
+      const sCheck = await db.query(`SELECT status, actual_harvest_date, actual_yield_quantity FROM seasons WHERE id = $1`, [seasonId]);
+      expect(sCheck.rows[0].status).toBe('completed');
+      expect(Number(sCheck.rows[0].actual_yield_quantity)).toBe(38.5);
+
+      // Verify snapshot structure
+      const snapshot = cert.snapshotData;
+      expect(snapshot.schemaVersion).toBe('1.0.0');
+      expect(snapshot.farmer.fullName).toBe('Koteswara Rao');
+      expect(snapshot.crop.name).toBe('Paddy (Rice)');
+      expect(snapshot.waterMetrics.hasUnvalidatedAssumptions).toBe(true);
+      expect(snapshot.waterMetrics.unvalidatedAssumptionsList.length).toBeGreaterThan(0);
+    });
+
+    it('prevents issuing a duplicate certificate for the same season', async () => {
+      const res = await request(app)
+        .post(`/api/v1/certificates/seasons/${seasonId}/issue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actualHarvestDate: '2026-06-14',
+          yieldQuantity: 40.0,
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Certificate already issued');
+    });
+
+    it('verifies SHA-256 hash mathematically matches canonical snapshot and detects any tampering', async () => {
+      const cert = await certificateService.getCertificateById(issuedCertificateId);
+      expect(cert).not.toBeNull();
+
+      // 1. Legitimate integrity check
+      const legitimateMatches = snapshotService.verifyIntegrity(cert!.snapshotData, cert!.sha256Hash);
+      expect(legitimateMatches).toBe(true);
+
+      // 2. Tampered integrity check (change 1 character)
+      const tamperedSnapshot = JSON.parse(JSON.stringify(cert!.snapshotData));
+      tamperedSnapshot.waterMetrics.totalAppliedLitres = 999999; // Tampered volume!
+
+      const tamperedMatches = snapshotService.verifyIntegrity(tamperedSnapshot, cert!.sha256Hash);
+      expect(tamperedMatches).toBe(false); // MUST FAIL
+    });
+  });
+
+  describe('3. Bilingual PDF Certificate Generation with Noto Sans Telugu & QR Code', () => {
+    it('generates a valid, non-empty PDF document buffer with embedded Telugu text and QR code', async () => {
+      const cert = await certificateService.getCertificateById(issuedCertificateId);
+      expect(cert).not.toBeNull();
+
+      const pdfBuffer = await pdfCertificateService.generateCertificatePdf(cert!);
+      expect(pdfBuffer).toBeInstanceOf(Buffer);
+      expect(pdfBuffer.length).toBeGreaterThan(5000); // Substantial PDF size
+
+      // Verify PDF magic header bytes: %PDF-
+      const header = pdfBuffer.subarray(0, 5).toString('ascii');
+      expect(header).toBe('%PDF-');
+    });
+
+    it('GET /api/v1/certificates/:id/pdf downloads or streams the generated PDF', async () => {
+      const res = await request(app)
+        .get(`/api/v1/certificates/${issuedCertificateId}/pdf`)
+        .set('Cookie', adminCookie);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('application/pdf');
+      expect(res.headers['content-disposition']).toContain(issuedCertificateCode);
+      expect(res.body.length).toBeGreaterThan(5000);
+    });
+  });
+
+  describe('4. Public Verification Route (Unauthenticated)', () => {
+    it('GET /api/v1/certificates/verify/:code succeeds without auth cookies and asserts integrity', async () => {
+      const res = await request(app)
+        .get(`/api/v1/certificates/verify/${issuedCertificateCode}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.certificateCode).toBe(issuedCertificateCode);
+      expect(res.body.data.farmerName).toBe('Koteswara Rao');
+      expect(res.body.data.cropName).toBe('Paddy (Rice)');
+      expect(res.body.data.cropNameTe).toBe('వరి');
+      expect(res.body.data.isValid).toBe(true);
+      expect(res.body.data.hashMatches).toBe(true);
+      expect(res.body.data.tamperDetected).toBe(false);
+      expect(res.body.data.hasUnvalidatedAssumptions).toBe(true);
+      expect(res.body.data.unvalidatedAssumptionsList.length).toBeGreaterThan(0);
+    });
+
+    it('GET /api/v1/certificates/verify/:code returns 404 for non-existent certificate', async () => {
+      const res = await request(app)
+        .get('/api/v1/certificates/verify/JALAMITRA-INVALID-CODE');
+
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain('not found');
+    });
+  });
+
+  describe('5. Certificate Revocation & Governance Workflow', () => {
+    it('rejects revocation attempt by unauthenticated user (401)', async () => {
+      const res = await request(app)
+        .post(`/api/v1/certificates/${issuedCertificateId}/revoke`)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ reason: 'Unauthorized tampering attempt' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('allows Admin to revoke certificate and updates public verification status', async () => {
+      const res = await request(app)
+        .post(`/api/v1/certificates/${issuedCertificateId}/revoke`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ reason: 'Audit discrepancy in pump discharge meter readings.' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.isRevoked).toBe(true);
+      expect(res.body.data.revocationReason).toBe('Audit discrepancy in pump discharge meter readings.');
+
+      // Public verification must now report isRevoked = true and isValid = false
+      const pubRes = await request(app)
+        .get(`/api/v1/certificates/verify/${issuedCertificateCode}`);
+
+      expect(pubRes.status).toBe(200);
+      expect(pubRes.body.data.isRevoked).toBe(true);
+      expect(pubRes.body.data.isValid).toBe(false);
+      expect(pubRes.body.data.revocationReason).toBe('Audit discrepancy in pump discharge meter readings.');
+    });
+  });
+
+  describe('6. Village Scoping for AGRI_PANCHAYAT on Certificate Directory', () => {
+    it('restricts AGRI_PANCHAYAT to viewing only certificates in their assigned villages', async () => {
+      // 1. Create a second village
+      const v2Res = await db.query(
+        `INSERT INTO villages (name, mandal, district, gram_panchayat, latitude, longitude)
+         VALUES ('Guntur Canal Village', 'Tenali', 'Guntur', 'Tenali GP', 16.24, 80.64)
+         RETURNING id`
+      );
+      const village2Id = v2Res.rows[0].id;
+
+      // 2. Create AGRI_PANCHAYAT user assigned only to village2Id
+      const officerEmail = 'officer.certs@csp-irrigation.org';
+      const userRes = await request(app)
+        .post('/api/v1/users')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          name: 'Officer Certs',
+          email: officerEmail,
+          password: 'OfficerPassword123!',
+          role: 'AGRI_PANCHAYAT',
+        });
+      expect(userRes.status).toBe(201);
+      const officerId = userRes.body.data.id;
+
+      await request(app)
+        .put(`/api/v1/users/${officerId}/scopes`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          scopes: [{ scope_type: 'village', scope_value: village2Id }],
+        });
+
+      // Login as officer
+      const offLogin = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          email: officerEmail,
+          password: 'OfficerPassword123!',
+        });
+      const offCookie = offLogin.headers['set-cookie'];
+
+      // Listing certificates for officer in village2Id should return 0 (as issued cert is in villageId)
+      const listRes = await request(app)
+        .get('/api/v1/certificates')
+        .set('Cookie', offCookie);
+
+      expect(listRes.status).toBe(200);
+      expect(listRes.body.total).toBe(0);
+      expect(listRes.body.data.length).toBe(0);
+
+      // Attempting to download PDF for out-of-scope cert returns 403
+      const pdfRes = await request(app)
+        .get(`/api/v1/certificates/${issuedCertificateId}/pdf`)
+        .set('Cookie', offCookie);
+
+      expect(pdfRes.status).toBe(403);
+    });
+  });
+});

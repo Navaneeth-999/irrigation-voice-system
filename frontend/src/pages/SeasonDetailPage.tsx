@@ -18,6 +18,7 @@ import {
   Plus,
   Play,
   FileText,
+  Award,
 } from 'lucide-react';
 import { Card } from '../components/ui/Card.js';
 import { Button } from '../components/ui/Button.js';
@@ -169,14 +170,16 @@ export const SeasonDetailPage: React.FC = () => {
 
   const completeSeasonMutation = useMutation({
     mutationFn: (payload: any) =>
-      apiRequest(`/seasons/${id}/complete`, {
+      apiRequest(`/certificates/seasons/${id}/issue`, {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['season', id] });
       queryClient.invalidateQueries({ queryKey: ['season-timeline', id] });
+      queryClient.invalidateQueries({ queryKey: ['certificates'] });
       setIsCompleteModalOpen(false);
+      alert(`Season marked complete! Conservation Certificate issued: ${res.data?.certificateCode || ''}`);
     },
     onError: (err: any) => alert(err.message),
   });
@@ -327,6 +330,19 @@ export const SeasonDetailPage: React.FC = () => {
                   <span>Complete Season (కోత/పూర్తి)</span>
                 </Button>
               </>
+            )}
+
+            {isCompleted && (
+              <Link to="/certificates">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="flex items-center gap-1.5 border-emerald-300 text-emerald-800 hover:bg-emerald-50 font-medium"
+                >
+                  <Award className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>View Conservation Certificate (ధృవీకరణ పత్రం)</span>
+                </Button>
+              </Link>
             )}
           </div>
         </div>
