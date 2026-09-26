@@ -17,15 +17,16 @@ let pool: pg.Pool | null = null;
 let pgliteInstance: PGlite | null = null;
 
 // Determine connection strategy
+const effectiveDbUrl = config.DIRECT_DATABASE_URL || config.DATABASE_URL;
 const isPostgresConfigured = Boolean(
-  config.DATABASE_URL &&
-  !config.DATABASE_URL.includes('your-project') &&
-  config.DATABASE_URL.startsWith('postgres')
+  effectiveDbUrl &&
+  !effectiveDbUrl.includes('your-project') &&
+  effectiveDbUrl.startsWith('postgres')
 );
 
 if (isPostgresConfigured) {
   pool = new pg.Pool({
-    connectionString: config.DATABASE_URL,
+    connectionString: effectiveDbUrl,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,

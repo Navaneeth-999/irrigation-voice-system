@@ -114,5 +114,24 @@ This living document records significant technical and architectural decisions, 
   4. **Strict Opt-In Channel Consent & Season Scoping:** Alert fan-out is strictly scoped to farmers who possess an active season (`seasons.status = 'active'`) in that village, an active primary contact, and explicit granted consent record (`consents.status = 'granted'`) for the target channel. Silence or absence of a consent record is treated as non-consent (`status = 'blocked'`, reason: `NO_CONSENT`).
   5. **Role Mapping for Agricultural Officers:** Confirmed that "Agricultural Officers" in the manual advisory publishing feature maps directly to the existing `AGRI_PANCHAYAT` role in the schema, with village-level boundary enforcement via `user_scopes`.
 
+---
+
+## DECISION-013: Phase 5 Agronomic Analytics, Assumption Transparency, Non-Competitive WUR & Row-Locking
+- **Context:** Establishing the scientific and architectural foundations for Phase 5 (FAO-56 Evapotranspiration, Paddy Ponding, Effective Rainfall, Water Use Ratio, Anomaly Detection, and Concurrent Job Processing).
+- **Decision:**
+  1. **Unvalidated Assumption Transparency:** Any agronomic parameter (crop stage $K_c$, paddy percolation rate $SP$, puddling depth, effective rainfall coefficient) with `verified = false` must be visibly displayed as *"Based on unvalidated assumptions"* in the analytics UI, data summaries, and certificates/reports. This ensures scientific honesty and community service project evaluation integrity.
+  2. **Configurable Effective Rainfall Method:** The effective rainfall calculation algorithm is dynamically loaded from `app_settings` (`key = 'effective_rainfall_method'`), never hardcoded. Default baseline: daily precipitation $< 5.0\,\text{mm} \implies P_{\text{eff}} = 0$; $5.0 \le P \le 50.0\,\text{mm} \implies P_{\text{eff}} = (P - 5.0) \times 0.75$; $P > 50.0\,\text{mm} \implies P_{\text{eff}} = 35.0\,\text{mm}$ (capped at maximum daily infiltration).
+  3. **Non-Competitive Water Use Ratio (WUR):** The Water Use Ratio ($WUR = \text{Total Applied Water} / \text{Net Agronomic Demand}$) is strictly presented as an indicative qualitative band:
+     - `below_estimate` ($WUR < 0.85$): Deficit irrigation or uncaptured moisture sources.
+     - `near_estimate` ($0.85 \le WUR \le 1.20$): Agronomically balanced irrigation.
+     - `above_estimate` ($WUR > 1.20$): Surplus irrigation relative to estimated crop demand.
+     No farmer rankings, leaderboards, or "best farmer" competitive scores are ever constructed.
+  4. **Fortnightly Implausible-Hours Reasoning:** The anomaly detection rule for implausible pump running hours evaluates the entire 14-day reporting fortnight ($14 \text{ days} \times 24 \text{ hours} = 336 \text{ hours}$ maximum physical limit across all pump sources). Values exceeding 336 hours (or exceeding operational motor thermal thresholds $> 280$ hours) trigger an `implausible_hours` anomaly flag and create a review item in `action_items`.
+  5. **Concurrency & Row-Locking (`FOR UPDATE SKIP LOCKED`):** The non-blocking row-locking pattern is standardized across three critical worker queues:
+     - `call_schedule`: Fortnightly voice feedback calls.
+     - `weather_alerts`: Notification fan-out processing (`notification_status = 'pending'`).
+     - `analytics_processing_queue`: Daily $ET_c$ and fortnightly water-balance aggregation batch jobs.
+
+
 
 

@@ -19,7 +19,8 @@
     "seed:demo": "tsx src/scripts/seed-demo.ts",
     "demo:reset": "tsx src/scripts/demo-reset.ts",
     "create-admin": "tsx src/scripts/create-admin.ts",
-    "twilio:spike": "tsx src/scripts/twilio-spike.ts"
+    "twilio:spike": "tsx src/scripts/twilio-spike.ts",
+    "test:locking": "tsx src/scripts/verify-postgres-locking.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.16",

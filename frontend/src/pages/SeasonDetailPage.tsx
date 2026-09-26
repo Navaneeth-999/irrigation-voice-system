@@ -246,6 +246,16 @@ export const SeasonDetailPage: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            <Link to={`/analytics?seasonId=${season.id}`}>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="flex items-center gap-1.5 border-forest-200 text-forest-800 hover:bg-forest-50"
+              >
+                <Activity className="w-3.5 h-3.5 text-forest-600" />
+                <span>Water Analytics (నీటి లెక్కలు)</span>
+              </Button>
+            </Link>
             {isDraft && canManage && (
               <>
                 <Button

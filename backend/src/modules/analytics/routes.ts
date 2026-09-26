@@ -1,12 +1,22 @@
 import { Router } from 'express';
-import { getDashboardKPIs } from './controller.js';
-import { requireAuth } from '../../middleware/auth.js';
-import { asyncHandler } from '../../middleware/asyncHandler.js';
+import { requireAuth, requireRole } from '../../middleware/auth.js';
+import { analyticsController, getDashboardKPIs } from './controller.js';
 
 const router = Router();
 
 router.use(requireAuth);
 
-router.get('/dashboard', asyncHandler(getDashboardKPIs));
+router.get('/dashboard', getDashboardKPIs);
+
+router.get(
+  '/seasons/:seasonId',
+  (req, res) => analyticsController.getSeasonAnalytics(req, res)
+);
+
+router.post(
+  '/seasons/:seasonId/recalculate',
+  requireRole('ADMIN', 'CSP_MEMBER', 'AGRI_PANCHAYAT'),
+  (req, res) => analyticsController.recalculateSeason(req, res)
+);
 
 export default router;

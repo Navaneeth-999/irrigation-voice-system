@@ -23,9 +23,11 @@ import { CallSimulatorPage } from './pages/CallSimulatorPage.js';
 // Phase 4 Pages
 import { WeatherAlertsPage } from './pages/WeatherAlertsPage.js';
 
+// Phase 5 Page
+import { AnalyticsPage } from './pages/AnalyticsPage.js';
+
 // Subsequent Phase Pages (Placeholders)
 import {
-  AnalyticsPage,
   CertificatesPage,
   SettingsPage,
   AuditPage,

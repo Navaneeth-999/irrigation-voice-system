@@ -1,9 +1,9 @@
 # Project Development Progress (`docs/PROGRESS.md`)
 
 ## Status Overview
-- Current Phase: **PHASE 4: Weather, Alerts & Communication Engine (COMPLETED & VERIFIED)**
-- Next Phase: **PHASE 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence**
-- Last Updated: 2026-09-25
+- Current Phase: **PHASE 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence (COMPLETED & VERIFIED)**
+- Next Phase: **PHASE 6: Reports, Certificates, Immutable Snapshots, QR Verification**
+- Last Updated: 2026-09-26
 
 ---
 
@@ -16,8 +16,8 @@
 | **Phase 2** | Seasons, Snapshots, Irrigation Records, Feedback, Action Queue | **DONE** | Migration 004 applied, frozen snapshot rule verified by mutation test, 18/18 tests passed. |
 | **Phase 3** | Call System, Telugu IVR, CallFlowEngine, Twilio Spike & Simulator | **DONE** | Migration 005 applied, 10 Telugu questions, pure state machine, audio gating, 24/24 tests passed (66/66 total). |
 | **Phase 4** | Weather Service, Open-Meteo Adapter, Alert Engine, Voice & SMS Alerts | **DONE** | Migration 006 applied, Open-Meteo live API, composite deduplication, NotificationService guardrails (voice + SMS, strict opt-in consent, 09:00-18:00 voice quiet hours, max 1 call/day cap, possibility language, AGRI_PANCHAYAT scoping), 19/19 tests passed (85/85 total). |
-| **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | READY | Kc stage tracking, water-use ratio, anomaly rules, Recharts dashboard. |
-| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | PENDING | PDFKit with Noto Sans Telugu, SHA-256 hash, public verification page. |
+| **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | **DONE** | Migration 007 applied, FAO-56 engine, configurable USDA-SCS effective rainfall, paddy ponding balance, indicative qualitative WUR bands (no leaderboards), 336-hour fortnight anomaly reasoning, 4-pillar data confidence scoring, Recharts balance graph, 16/16 tests passed (101/101 total). |
+| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | READY | PDFKit with Noto Sans Telugu, SHA-256 hash, public verification page. |
 | **Phase 7** | Hardening, Playwright E2E 22-Step Demo, Deployment Runbooks | PENDING | Full test suite, demo reset script, deployment guides for Vercel/Render. |
 
 ---
@@ -111,6 +111,53 @@
 
 ---
 
+### Phase 5 Deliverables & Verifications
+
+#### Backend Deliverables:
+1. **Water Analytics & Balance Schema Migration (`007_water_analytics_fao56.sql`):**
+   - `season_daily_water_balance`: Daily water balances tracking stage $K_c$, reference $ET_0$, crop evapotranspiration $ET_c$, effective precipitation $P_{\text{eff}}$, farmer-reported applied water, percolation loss, ponding water depth, and unvalidated parameter flags.
+   - `season_water_metrics`: Seasonal aggregates tracking total theoretical irrigation demand (L and mm), applied irrigation (L and mm), rainfall received, Water Use Ratio ($WUR$), indicative qualitative band (`below_estimate`, `near_estimate`, `above_estimate`), 4-pillar data confidence score (0–100), active anomaly flags, and serialized list of unvalidated assumptions.
+   - `analytics_processing_queue`: Batch calculation queue with `FOR UPDATE SKIP LOCKED` row locking for multi-worker safety.
+   - Added `notification_status` column and index on `weather_alerts` for high-throughput alert fan-out locking.
+   - Row-level security (RLS) enabled deny-by-default on all new tables.
+2. **Configurable Effective Rainfall Service (`modules/analytics/EffectiveRainfallService.ts`):**
+   - Evaluates effective rainfall $P_{\text{eff}}$ using standard USDA Soil Conservation Service formula, loaded dynamically from `app_settings` (`effective_rainfall_method`).
+   - Never hard-coded; falls back gracefully to USDA-SCS method if settings are unconfigured.
+3. **FAO-56 Evapotranspiration Engine (`modules/analytics/Fao56Engine.ts`):**
+   - Computes crop evapotranspiration $ET_c = K_c \times ET_0$.
+   - Implements linear interpolation of $K_c$ across developmental crop stages.
+   - Enforces parameter verification transparency: any unverified $K_c$ coefficient flags `verified = false` and appends an unvalidated assumption notice.
+4. **Paddy Ponding Model (`modules/analytics/PaddyPondingModel.ts`):**
+   - Flooded rice ponding water balance: $h_t = h_{t-1} + P_{\text{eff}} + I_t - ET_c - SP - D$ where $h_t$ is ponding depth, $SP$ is soil percolation/seepage, and $D$ is surface drainage overflow over bund height (typically 75mm).
+   - Accounts for pre-saturation / puddling water requirements at transplanting.
+5. **Indicative Qualitative Water Use Ratio (`modules/analytics/WaterUseRatioEngine.ts`):**
+   - Calculates $WUR = \text{Total Applied Volume} / \text{Total Estimated Net Demand}$.
+   - Classifies strictly into non-competitive qualitative bands: `below_estimate` ($WUR < 0.85$), `near_estimate` ($0.85 \le WUR \le 1.25$), `above_estimate` ($WUR > 1.25$).
+   - **Zero Leaderboards / No Competitive Ranking:** System strictly forbids numerical ranking or "best farmer" leaderboards per DECISION-013.
+6. **14-Day Fortnight Anomaly Reasoning (`modules/analytics/AnomalyEngine.ts`):**
+   - **336-Hour Cycle Ceiling:** Evaluates cumulative pump running hours over the full 14-day cycle ($14 \times 24 = 336$ max physical hours across all pumps on plot). Flags `implausible_pump_hours` if reported hours exceed the operational ceiling of 280 hours.
+   - **Rain-Irrigation Conflict:** Detects reported irrigation $>40\,\text{mm}$ on dates where observed rainfall exceeded $50\,\text{mm}$, flagging `rain_irrigation_conflict`.
+   - Automatically routes unresolved anomalies to `action_items` as `type = 'suspicious_data'`.
+7. **4-Pillar Data Confidence Scoring (`modules/analytics/DataConfidenceService.ts`):**
+   - Multi-factor confidence score (0–100): Response Coverage (40%), Data Completeness (30%), Field Evidence (15%), Anomaly Consistency (15%).
+   - Surfaced to users as a weighted breakdown with an overall confidence rating (`High`, `Moderate`, `Low`).
+8. **PostgreSQL Row-Locking Test Harness (`scripts/verify-postgres-locking.ts`):**
+   - Script runnable via `npm run test:locking` to verify concurrency safety of `FOR UPDATE SKIP LOCKED` against real PostgreSQL databases.
+
+#### Frontend Deliverables:
+1. **Water Analytics Dashboard (`/analytics?seasonId=...`):**
+   - Season selector dropdown with quick season switcher.
+   - **Unvalidated Assumptions Banner:** Highly visible amber warning banner prominently surfacing unverified agronomic assumptions to users and officers.
+   - Indicative Water Use Ratio summary card with contextual qualitative band badges (`near_estimate`, `below_estimate`, `above_estimate`).
+   - 4-Pillar Data Confidence scorecard with animated progress bars for each dimension.
+   - Interactive daily and cumulative water balance chart (Recharts) visualizing $ET_c$ crop demand vs farmer-applied irrigation vs effective rainfall.
+   - Flagged anomalies list linking to open action items.
+   - Recalculate button triggering instantaneous on-demand recalculation.
+2. **Deep-linking from Season Details:**
+   - Added direct "Water Analytics (నీటి లెక్కలు)" navigation button to `SeasonDetailPage` header.
+
+---
+
 ### Real vs Mock Status
 
 | Component | Current State | Notes |
@@ -124,18 +171,25 @@
 | **Weather Forecasts** | Real Open-Meteo Live API + Mock Fallback | Live Open-Meteo API with Asia/Kolkata timezone and FAO-56 ET0; deterministic mock fallback. |
 | **Alert Engine & Deduplication** | Real | Rule evaluation against IMD thresholds with composite key deduplication. |
 | **Communication, Voice & SMS** | Real NotificationService + Telephony/SMS Adapters | Pre-recorded Telugu voice alerts + SMS; full guardrails (opt-in consent, quiet hours, daily caps, kill switch). |
+| **Water Balance & FAO-56 Engine** | Real | FAO-56 dual/single Kc, USDA-SCS effective rainfall, paddy ponding balance model, and confidence scoring. |
+| **Row Locking & Concurrency Queue**| Real PostgreSQL Pattern | `FOR UPDATE SKIP LOCKED` across call dispatch, weather alerts, and analytics queue (`npm run test:locking`). |
 
 ---
 
-### How to Run and Test Phase 4
+### How to Run and Test Phase 5
 
-#### 1. Backend Automated Tests (85/85 tests passing across all phases):
+#### 1. Backend Automated Tests (101/101 tests passing across all phases):
 ```bash
 cd backend
 npm test
 ```
 
-#### 2. Start Application:
+#### 2. Verify PostgreSQL Row Locking (against real Supabase / Postgres):
+```bash
+DIRECT_DATABASE_URL="postgres://..." npm run test:locking --prefix backend
+```
+
+#### 3. Start Application:
 ```bash
 # Terminal 1: Backend
 npm run dev --prefix backend
@@ -143,4 +197,5 @@ npm run dev --prefix backend
 # Terminal 2: Frontend
 npm run dev --prefix frontend
 ```
-Navigate to `http://localhost:5173/weather` to view live forecasts, active alerts, publish an advisory, or inspect communication logs.
+Navigate to `http://localhost:5173/analytics` to view the FAO-56 water balance, data confidence scores, and indicative Water Use Ratio.
+
