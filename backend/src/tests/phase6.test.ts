@@ -292,21 +292,30 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
   });
 
   describe('4. Public Verification Route (Unauthenticated)', () => {
-    it('GET /api/v1/certificates/verify/:code succeeds without auth cookies and asserts integrity', async () => {
+    it('GET /api/v1/certificates/verify/:code succeeds without auth cookies and asserts integrity with strict privacy filtering', async () => {
       const res = await request(app)
         .get(`/api/v1/certificates/verify/${issuedCertificateCode}`);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.certificateCode).toBe(issuedCertificateCode);
-      expect(res.body.data.farmerName).toBe('Koteswara Rao');
-      expect(res.body.data.cropName).toBe('Paddy (Rice)');
-      expect(res.body.data.cropNameTe).toBe('వరి');
+
+      // Exact 6 fields permitted on public verification portal (User Directive 3)
+      expect(res.body.data.certificateNumber).toBe(issuedCertificateCode);
+      expect(res.body.data.season).toBeDefined();
+      expect(res.body.data.crop).toContain('Paddy (Rice)');
+      expect(res.body.data.village).toBeDefined();
+      expect(res.body.data.issueDate).toBeDefined();
+      expect(res.body.data.status).toBe('valid');
       expect(res.body.data.isValid).toBe(true);
-      expect(res.body.data.hashMatches).toBe(true);
-      expect(res.body.data.tamperDetected).toBe(false);
-      expect(res.body.data.hasUnvalidatedAssumptions).toBe(true);
-      expect(res.body.data.unvalidatedAssumptionsList.length).toBeGreaterThan(0);
+      expect(res.body.data.sha256Validated).toBe(true);
+
+      // Ensure sensitive farmer, land, and confidence details are strictly stripped
+      expect(res.body.data.farmerName).toBeUndefined();
+      expect(res.body.data.farmerCode).toBeUndefined();
+      expect(res.body.data.plotId).toBeUndefined();
+      expect(res.body.data.plotLabel).toBeUndefined();
+      expect(res.body.data.confidenceScore).toBeUndefined();
+      expect(res.body.data.waterUseRatio).toBeUndefined();
     });
 
     it('GET /api/v1/certificates/verify/:code returns 404 for non-existent certificate', async () => {
@@ -410,6 +419,107 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
         .set('Cookie', offCookie);
 
       expect(pdfRes.status).toBe(403);
+    });
+  });
+
+  describe('7. Certificate Eligibility Gating & Ineligible Season Summary Report', () => {
+    it('gates certificate issuance when monitoring coverage and confidence thresholds are not met, producing a Season Report instead', async () => {
+      // Create a season with 0 farmer feedback (0% coverage)
+      const ineligSeasonRes = await db.query(
+        `INSERT INTO seasons (
+          season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
+          season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
+        )
+        VALUES ('S-2026-INELIG-001', $1, $2, $3, $4, 'kharif', 2026, '2026-06-01', '2026-09-30', 3.0, 'active', 'real')
+        RETURNING id`,
+        [farmerId, plotId, cropId, methodId]
+      );
+      const ineligSeasonId = ineligSeasonRes.rows[0].id;
+
+      // Check eligibility endpoint
+      const eligRes = await request(app)
+        .get(`/api/v1/certificates/seasons/${ineligSeasonId}/eligibility`)
+        .set('Cookie', adminCookie);
+
+      expect(eligRes.status).toBe(200);
+      expect(eligRes.body.data.isEligible).toBe(false);
+      expect(eligRes.body.data.reasons.length).toBeGreaterThan(0);
+      expect(eligRes.body.data.reasons[0]).toContain('Monitoring cycle coverage');
+
+      // Attempt completing harvest on this ineligible season
+      const issueRes = await request(app)
+        .post(`/api/v1/certificates/seasons/${ineligSeasonId}/issue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          actualHarvestDate: '2026-06-14',
+          yieldQuantity: 30.0,
+          yieldUnit: 'quintal',
+          completionNotes: 'Completed with zero farmer responses.',
+        });
+
+      expect(issueRes.status).toBe(200);
+      expect(issueRes.body.eligible).toBe(false);
+      expect(issueRes.body.data.reportCode).toMatch(/^JALAMITRA-REPORT-2026-[A-Z0-9]{5}$/);
+      expect(issueRes.body.ineligibilityReasons.length).toBeGreaterThan(0);
+
+      // Verify season table marked ineligible
+      const sCheck = await db.query(`SELECT status, certificate_status FROM seasons WHERE id = $1`, [ineligSeasonId]);
+      expect(sCheck.rows[0].status).toBe('completed');
+      expect(sCheck.rows[0].certificate_status).toBe('ineligible');
+
+      // Verify NO certificate record exists in certificates table
+      const certCheck = await db.query(`SELECT COUNT(*)::int as count FROM certificates WHERE season_id = $1`, [ineligSeasonId]);
+      expect(certCheck.rows[0].count).toBe(0);
+
+      // Download Season Report PDF
+      const pdfReportRes = await request(app)
+        .get(`/api/v1/certificates/seasons/${ineligSeasonId}/report/pdf`)
+        .set('Cookie', adminCookie);
+
+      expect(pdfReportRes.status).toBe(200);
+      expect(pdfReportRes.headers['content-type']).toContain('application/pdf');
+      expect(pdfReportRes.body.length).toBeGreaterThan(2000);
+    });
+  });
+
+  describe('8. Certificate Reissuance & Version Tracking Hierarchy', () => {
+    it('reissues a certificate, links replaces_certificate_id, and increments version', async () => {
+      // Reissue the issued certificate
+      const reissueRes = await request(app)
+        .post(`/api/v1/certificates/${issuedCertificateId}/reissue`)
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          reason: 'Corrected pump discharge rating following field meter audit',
+          yieldQuantity: 42.5,
+        });
+
+      expect(reissueRes.status).toBe(201);
+      expect(reissueRes.body.success).toBe(true);
+
+      const newCert = reissueRes.body.data;
+      expect(newCert.version).toBe(2);
+      expect(newCert.replacesCertificateId).toBe(issuedCertificateId);
+      expect(newCert.certificateCode).not.toBe(issuedCertificateCode);
+
+      // Check old certificate is revoked and replaced_by linked
+      const oldCheck = await db.query(`SELECT is_revoked, replaced_by_certificate_id, revocation_reason FROM certificates WHERE id = $1`, [issuedCertificateId]);
+      expect(oldCheck.rows[0].is_revoked).toBe(true);
+      expect(oldCheck.rows[0].replaced_by_certificate_id).toBe(newCert.id);
+      expect(oldCheck.rows[0].revocation_reason).toContain('Replaced by reissued certificate');
+
+      // Public verification of old certificate shows revoked
+      const pubOld = await request(app).get(`/api/v1/certificates/verify/${issuedCertificateCode}`);
+      expect(pubOld.status).toBe(200);
+      expect(pubOld.body.data.status).toBe('revoked');
+      expect(pubOld.body.data.isValid).toBe(false);
+
+      // Public verification of new certificate shows valid
+      const pubNew = await request(app).get(`/api/v1/certificates/verify/${newCert.certificateCode}`);
+      expect(pubNew.status).toBe(200);
+      expect(pubNew.body.data.status).toBe('valid');
+      expect(pubNew.body.data.isValid).toBe(true);
     });
   });
 });

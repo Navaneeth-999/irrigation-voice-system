@@ -17,7 +17,7 @@
 | **Phase 3** | Call System, Telugu IVR, CallFlowEngine, Twilio Spike & Simulator | **DONE** | Migration 005 applied, 10 Telugu questions, pure state machine, audio gating, 24/24 tests passed (66/66 total). |
 | **Phase 4** | Weather Service, Open-Meteo Adapter, Alert Engine, Voice & SMS Alerts | **DONE** | Migration 006 applied, Open-Meteo live API, composite deduplication, NotificationService guardrails (voice + SMS, strict opt-in consent, 09:00-18:00 voice quiet hours, max 1 call/day cap, possibility language, AGRI_PANCHAYAT scoping), 19/19 tests passed (85/85 total). |
 | **Phase 5** | Water Analytics, FAO-56 Engine, Paddy Model, Data Confidence | **DONE** | Migration 007 applied, FAO-56 engine, configurable USDA-SCS effective rainfall, paddy ponding balance, indicative qualitative WUR bands (no leaderboards), 336-hour fortnight anomaly reasoning, 4-pillar data confidence scoring, Recharts balance graph, 19/19 tests passed (104/104 total). |
-| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | **DONE** | Migration 008 applied, canonical JSON serialization, deterministic SHA-256 hash, PDFKit with Noto Sans Telugu, QR code generation, public verification portal, 13/13 tests passed (117/117 total). |
+| **Phase 6** | Reports, Certificates, Immutable Snapshots, QR Verification | **DONE** | Migrations 008-009 applied, canonical JSON serialization, deterministic SHA-256 hash, PDFKit with Noto Sans Telugu, QR code with PUBLIC_FRONTEND_URL, strict 6-field privacy-filtered public verification portal, eligibility gating with ineligible season reports, and certificate reissuance hierarchy, 15/15 tests passed (119/119 total). |
 | **Phase 7** | Hardening, Playwright E2E 22-Step Demo, Deployment Runbooks | PENDING | Full test suite, demo reset script, deployment guides for Vercel/Render. |
 
 ---
@@ -180,27 +180,31 @@
    - Updates season state to `completed`.
    - Implements administrative revocation with mandatory audit rationale.
 5. **Public & Authenticated Endpoints (`modules/certificates/routes.ts`):**
-   - Public: `GET /api/v1/certificates/verify/:code` (open to public without auth, returns verified status, farmer initials/village, crop, WUR band, confidence, SHA-256 hash, and assumptions).
-   - Authenticated: `GET /api/v1/certificates` (with AGRI_PANCHAYAT village scoping), `GET /:id`, `GET /:id/pdf`, `POST /seasons/:seasonId/issue`, `POST /:id/revoke` (ADMIN only).
+   - Public: `GET /api/v1/certificates/verify/:code` (open to public without auth, returns strictly 6 non-sensitive fields: certificate number, season, crop, village, issue date, valid/revoked status).
+   - Authenticated: `GET /api/v1/certificates` (with AGRI_PANCHAYAT village scoping), `GET /:id`, `GET /:id/pdf`, `POST /seasons/:seasonId/issue`, `POST /:id/reissue`, `POST /:id/revoke` (ADMIN only), `GET /seasons/:seasonId/eligibility`, `GET /seasons/:seasonId/report`, `GET /seasons/:seasonId/report/pdf`.
+6. **Certificate Eligibility Gating & Ineligible Season Reports (`season_reports`):**
+   - Evaluates coverage $\ge 50\%$ and data confidence score $\ge 50$ (tier MEDIUM/HIGH), configured via `app_settings`.
+   - Ineligible seasons produce a Seasonal Water Summary Report (`season_reports`), marking `seasons.certificate_status = 'ineligible'` and rendering an audit report PDF without awarding a Conservation Certificate.
+7. **Certificate Reissuance Hierarchy (`replaces_certificate_id`):**
+   - Tracks replacement lineage and increments versions (`v1`, `v2`, etc.).
+   - Revokes prior certificates and links `replaces_certificate_id` and `replaced_by_certificate_id`. Partial unique index guarantees at most one active certificate per season.
 
 #### Frontend Deliverables:
 1. **Public Verification Portal (`/verify/:code`):**
    - Publicly accessible page with zero authentication required.
-   - Green verified checkmark badge with certificate code.
-   - Tamper-evident cryptographic SHA-256 hash display.
-   - Bilingual farmer, village, plot, crop, and season details.
-   - Indicative qualitative Water Use Ratio badge and 4-Pillar Data Confidence breakdown.
-   - Prominent amber Unvalidated Assumptions transparency card.
-   - Clear revocation notice banner when a certificate has been revoked.
+   - Green verified checkmark badge with certificate number.
+   - Tamper-evident cryptographic SHA-256 validation badge.
+   - Strictly limited to non-sensitive fields: Certificate Number, Season, Crop, Village, Issue Date, and Valid/Revoked Status.
+   - Complete exclusion of farmer names, plot surveys, GPS coordinates, pump hours, or private confidence data.
 2. **Authenticated Certificates Hub (`/certificates`):**
    - KPI metrics cards: Total Issued, Near Estimate Ratio, Avg Confidence, Active vs Revoked.
    - Search and filter bar by code, farmer, village, or status.
    - Certificate table with PDF download and public verification link.
    - Admin-only Revocation Modal with mandatory reason requirement.
-3. **Harvest Completion & Certificate Issuance Flow (`/seasons/:id`):**
-   - Updated harvest completion modal on `SeasonDetailPage` collecting actual harvest date, yield, and completion notes.
-   - Automatically issues cryptographic certificate and transitions season to `completed`.
-   - Added direct "View Conservation Certificate" action button on completed seasons.
+3. **Harvest Completion & Ineligibility Handling (`/seasons/:id`):**
+   - Harvest completion modal collects actual harvest date, yield, and completion notes.
+   - If eligible: transitions season to `completed` and issues accredited Conservation Certificate.
+   - If ineligible: transitions season to `completed`, shows prominent amber Ineligibility Banner detailing failing reasons, and offers immediate Seasonal Water Summary Report PDF download.
 
 ---
 
@@ -219,13 +223,13 @@
 | **Communication, Voice & SMS** | Real NotificationService + Telephony/SMS Adapters | Pre-recorded Telugu voice alerts + SMS; full guardrails (opt-in consent, quiet hours, daily caps, kill switch). |
 | **Water Balance & FAO-56 Engine** | Real | FAO-56 dual/single Kc, USDA-SCS effective rainfall, paddy ponding balance model, and confidence scoring. |
 | **Row Locking & Concurrency Queue**| Real PostgreSQL Pattern | `FOR UPDATE SKIP LOCKED` across call dispatch, weather alerts, and analytics queue (`npm run test:locking`). |
-| **Conservation Certificates** | Real | Immutable snapshots, canonical JSON SHA-256 seal, PDFKit with Noto Sans Telugu, and public verification portal. |
+| **Conservation Certificates** | Real | Immutable snapshots, canonical JSON SHA-256 seal, PDFKit with Noto Sans Telugu, PUBLIC_FRONTEND_URL QR codes, privacy filtering, eligibility gating, season reports, and reissuance hierarchy. |
 
 ---
 
 ### How to Run and Test Phase 6
 
-#### 1. Backend Automated Tests (117/117 tests passing across all 6 phases):
+#### 1. Backend Automated Tests (119/119 tests passing across all 6 phases):
 ```bash
 cd backend
 npm test

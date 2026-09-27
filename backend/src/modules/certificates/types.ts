@@ -85,6 +85,9 @@ export interface CertificateRecord {
   sha256Hash: string;
   pdfPath: string | null;
   verificationToken: string;
+  replacesCertificateId?: string | null;
+  replacedByCertificateId?: string | null;
+  version: number;
   isRevoked: boolean;
   revokedAt?: string | null;
   revocationReason?: string | null;
@@ -102,29 +105,62 @@ export interface IssueCertificateRequest {
   userId?: string;
 }
 
-export interface VerificationResult {
-  isValid: boolean;
-  isRevoked: boolean;
-  certificateCode: string;
-  issuedAt: string;
-  revokedAt?: string | null;
-  revocationReason?: string | null;
-  sha256Hash: string;
-  computedHash: string;
-  hashMatches: boolean;
-  tamperDetected: boolean;
-  farmerName: string;
-  villageName: string;
-  mandal: string;
-  district: string;
-  cropName: string;
-  cropNameTe: string;
-  seasonYear: number;
-  seasonType: string;
-  waterUseRatio: number;
-  ratioBand: WaterUseRatioBand;
+export interface ReissueCertificateRequest {
+  oldCertificateId: string;
+  reason: string;
+  actualHarvestDate?: string;
+  yieldQuantity?: number;
+  yieldUnit?: string;
+  completionNotes?: string;
+  userId?: string;
+}
+
+export interface EligibilityCheckResult {
+  isEligible: boolean;
+  monitoringCycleCoverage: number; // percentage (e.g. 75.0)
+  completedCycles: number;
+  totalCycles: number;
   confidenceScore: number;
   confidenceBand: ConfidenceBand;
-  hasUnvalidatedAssumptions: boolean;
-  unvalidatedAssumptionsList: string[];
+  reasons: string[];
+}
+
+export interface SeasonReportRecord {
+  id: string;
+  reportCode: string;
+  seasonId: string;
+  farmerId: string;
+  plotId: string;
+  cropId: string;
+  actualHarvestDate: string;
+  yieldQuantity: number | null;
+  yieldUnit: string | null;
+  monitoringCycleCoverage: number;
+  confidenceScore: number;
+  confidenceBand: ConfidenceBand;
+  waterUseRatio: number;
+  waterUseRatioBand: WaterUseRatioBand;
+  isCertificateEligible: boolean;
+  ineligibilityReasons: string[];
+  snapshotData: ImmutableSeasonSnapshot;
+  pdfPath: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+}
+
+/**
+ * Public Verification Result: strictly limited to non-sensitive fields
+ * per user directive: certificate number, season, crop, village, issue date, and valid/revoked status.
+ */
+export interface PublicVerificationResult {
+  certificateNumber: string;
+  season: string;
+  crop: string;
+  village: string;
+  issueDate: string;
+  status: 'valid' | 'revoked';
+  isValid: boolean;
+  isRevoked: boolean;
+  revocationReason?: string | null;
+  sha256Validated: boolean;
 }

@@ -143,3 +143,24 @@ This living document records significant technical and architectural decisions, 
   4. **Bilingual PDFKit Generation with Noto Sans Telugu:** Certificates are generated using PDFKit (A4 Landscape) embedding `NotoSansTelugu-Regular.ttf` and `NotoSansTelugu-Bold.ttf` for pristine native Telugu typography alongside English. Every certificate embeds a high-resolution QR code pointing to the public verification URL.
   5. **Public Verification Portal (No Authentication Required):** The route `GET /api/v1/certificates/verify/:code` and web page `/verify/:code` are public to allow any community member, panchayat officer, or buyer to verify the certificate without login. It dynamically recomputes the SHA-256 hash of the stored snapshot in real time to verify mathematical integrity.
   6. **Administrative Revocation:** Only users with `ADMIN` role can revoke a certificate, requiring an audit reason, immediately updating the public verification registry to flag `isRevoked: true` and `isValid: false`.
+
+---
+
+## DECISION-015: Certificate Eligibility Gating, Ineligible Season Reports, Public Privacy Filter & Reissue Hierarchy
+- **Context:** Hardening the certification subsystem prior to Phase 7: establishing eligibility criteria, handling seasons that fail certification, ensuring privacy on public QR code scans, and tracking certificate reissuance.
+- **Decision:**
+  1. **Configurable Eligibility Gating:** Awarding a seasonal Water Conservation Certificate requires meeting three criteria loaded dynamically from `app_settings`:
+     - Season completed (harvest date provided and valid).
+     - Minimum monitoring cycle coverage (default $\ge 50\%$, configured via `certificate_min_cycle_coverage_pct`): calculated as cycles completed divided by expected cycles up to actual harvest date.
+     - Minimum data confidence score and tier (default $\ge 50 / 100$ and `'medium'`, configured via `certificate_min_confidence_score` and `certificate_min_confidence_band`).
+  2. **Ineligible Season Summary Report (`season_reports`):** A season that fails eligibility must produce a Seasonal Water Summary Report but NOT a certificate. The database records `season_reports` with `is_certificate_eligible = false` and serialized `ineligibility_reasons`. The UI displays a prominent amber warning card detailing failing reasons, and provides a downloadable bilingual Seasonal Water Summary Report PDF.
+  3. **Strict Privacy Filter on Public Verification Portal:** The public verification page (`/verify/:code`) and endpoint (`GET /api/v1/certificates/verify/:code`) are strictly limited to 6 non-sensitive fields:
+     - Certificate Number
+     - Season
+     - Crop
+     - Village
+     - Issue Date
+     - Valid / Revoked Status (+ revocation reason if revoked)
+     Sensitive fields (farmer name, farmer code, plot label, acreage, coordinates, data confidence score, and private pump hours) are strictly withheld to protect farmer privacy and prevent land data scraping.
+  4. **Dynamic Frontend URL for QR Codes:** The PDF generator uses `PUBLIC_FRONTEND_URL` from environment configuration rather than a hardcoded localhost URL.
+  5. **Certificate Reissuance & Version Tracking Hierarchy:** Reissuing a certificate (`POST /api/v1/certificates/:id/reissue`) revokes the prior certificate, sets `replaces_certificate_id` on the new certificate, increments `version` (`v2`, `v3`, etc.), and updates `replaced_by_certificate_id` on the old certificate. The partial unique index `uq_active_certificate_per_season` guarantees that at most one active, unrevoked certificate exists per season.

@@ -179,7 +179,11 @@ export const SeasonDetailPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['season-timeline', id] });
       queryClient.invalidateQueries({ queryKey: ['certificates'] });
       setIsCompleteModalOpen(false);
-      alert(`Season marked complete! Conservation Certificate issued: ${res.data?.certificateCode || ''}`);
+      if (res.eligible) {
+        alert(`Season marked complete! Conservation Certificate issued: ${res.data?.certificateCode || ''}`);
+      } else {
+        alert(`Season marked complete! Note: Season did not qualify for a Conservation Certificate. A Seasonal Water Summary Report has been generated.`);
+      }
     },
     onError: (err: any) => alert(err.message),
   });
@@ -333,16 +337,35 @@ export const SeasonDetailPage: React.FC = () => {
             )}
 
             {isCompleted && (
-              <Link to="/certificates">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="flex items-center gap-1.5 border-emerald-300 text-emerald-800 hover:bg-emerald-50 font-medium"
-                >
-                  <Award className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>View Conservation Certificate (ధృవీకరణ పత్రం)</span>
-                </Button>
-              </Link>
+              <div className="flex items-center gap-2">
+                {season.certificate_status === 'ineligible' ? (
+                  <a
+                    href={`/api/v1/certificates/seasons/${id}/report/pdf`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="flex items-center gap-1.5 border-amber-400 text-amber-900 bg-amber-50 hover:bg-amber-100 font-medium"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Download Season Report (నీటి నివేదిక)</span>
+                    </Button>
+                  </a>
+                ) : (
+                  <Link to="/certificates">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="flex items-center gap-1.5 border-emerald-300 text-emerald-800 hover:bg-emerald-50 font-medium"
+                    >
+                      <Award className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>View Conservation Certificate (ధృవీకరణ పత్రం)</span>
+                    </Button>
+                  </Link>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -415,6 +438,44 @@ export const SeasonDetailPage: React.FC = () => {
           )}
         </div>
       </Card>
+
+      {/* Ineligibility Alert Banner for Completed Seasons */}
+      {isCompleted && season.certificate_status === 'ineligible' && (
+        <Card className="p-4 border-l-4 border-l-amber-500 bg-amber-50/80">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-amber-900">
+                  Season Ineligible for Conservation Certificate (ధృవీకరణ పత్రానికి అర్హత పొందలేదు)
+                </h3>
+                <a
+                  href={`/api/v1/certificates/seasons/${id}/report/pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-bold text-amber-800 underline hover:text-amber-950 flex items-center gap-1"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Download Summary Report (PDF)</span>
+                </a>
+              </div>
+              <p className="text-xs text-amber-800 mt-1">
+                This season finished cultivation, but did not satisfy the minimum monitoring coverage or data confidence thresholds required for an accredited Water Conservation Certificate:
+              </p>
+              <ul className="mt-2 space-y-1 text-xs text-amber-900 font-medium list-disc list-inside">
+                {(Array.isArray(season.ineligibility_reasons)
+                  ? season.ineligibility_reasons
+                  : (typeof season.ineligibility_reasons === 'string' ? JSON.parse(season.ineligibility_reasons) : [])
+                ).map((reason: string, idx: number) => (
+                  <li key={idx}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Tab Navigation */}
       <div className="flex border-b border-gray-200">
