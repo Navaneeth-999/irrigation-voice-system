@@ -71,6 +71,34 @@ const envSchema = z.object({
 
   // Optional AI
   LLM_PROVIDER: z.enum(['none', 'gemini', 'openai']).default('none'),
+}).superRefine((data, ctx) => {
+  if (data.NODE_ENV === 'production') {
+    const isDefaultJwt = !process.env.JWT_SECRET || data.JWT_SECRET === 'development_jwt_secret_must_be_over_16_chars_long';
+    if (isDefaultJwt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['JWT_SECRET'],
+        message: 'FATAL: In production (NODE_ENV=production), JWT_SECRET must be explicitly set to a unique cryptographically random secret and cannot use the development default value.',
+      });
+    }
+
+    const isDefaultAdminPassword = !process.env.ADMIN_BOOTSTRAP_PASSWORD || data.ADMIN_BOOTSTRAP_PASSWORD === 'ChangeMeAdmin123!';
+    if (isDefaultAdminPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ADMIN_BOOTSTRAP_PASSWORD'],
+        message: 'FATAL: In production (NODE_ENV=production), ADMIN_BOOTSTRAP_PASSWORD must be explicitly set and cannot use the default value.',
+      });
+    }
+
+    if (!data.DIRECT_DATABASE_URL && !data.DATABASE_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DATABASE_URL'],
+        message: 'FATAL: In production, DATABASE_URL or DIRECT_DATABASE_URL must be provided. In-memory PGlite is disabled for production deployments.',
+      });
+    }
+  }
 });
 
 const parsed = envSchema.safeParse(process.env);
