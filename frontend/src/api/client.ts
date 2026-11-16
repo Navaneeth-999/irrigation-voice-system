@@ -20,7 +20,8 @@ export class ApiError extends Error {
   }
 }
 
-const BASE_URL = '/api/v1';
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const BASE_URL = API_BASE ? `${API_BASE}/api/v1` : '/api/v1';
 
 export async function apiRequest<T = any>(
   endpoint: string,
