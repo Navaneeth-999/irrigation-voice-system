@@ -35,7 +35,10 @@ export async function createAdminUser() {
 
     console.log(`✅ Admin user created: ${res.rows[0].email} (Must change password on first login)`);
   } else {
-    console.log(`ℹ️ Admin user already exists: ${email}`);
+    await db.query(`
+      UPDATE users SET password_hash = $1, must_change_password = true, is_active = true WHERE email = $2
+    `, [passwordHash, email.toLowerCase().trim()]);
+    console.log(`ℹ️ Admin user updated to bootstrap credentials: ${email}`);
   }
 }
 

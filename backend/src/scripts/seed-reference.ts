@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { db, withTransaction, closeDatabase } from '../db/index.js';
 import { seedQuestionnaire } from './seed-prompts.js';
 
@@ -6,21 +8,31 @@ export async function seedReferenceData() {
 
   await withTransaction(async (tx) => {
     // 1. Villages
-    const villages = [
-      { name: 'Guntur Rural', mandal: 'Guntur', district: 'Guntur', gram_panchayat: 'Guntur GP', lat: 16.3067, lon: 80.4365 },
-      { name: 'Tenali North', mandal: 'Tenali', district: 'Guntur', gram_panchayat: 'Tenali GP', lat: 16.2430, lon: 80.6400 },
-      { name: 'Mangalagiri East', mandal: 'Mangalagiri', district: 'Guntur', gram_panchayat: 'Mangalagiri GP', lat: 16.4300, lon: 80.5500 },
-      { name: 'Amaravati Central', mandal: 'Amaravati', district: 'Palnadu', gram_panchayat: 'Amaravati GP', lat: 16.5800, lon: 80.3200 },
-      { name: 'Bapatla Coastal', mandal: 'Bapatla', district: 'Bapatla', gram_panchayat: 'Bapatla GP', lat: 15.9000, lon: 80.4700 },
-      { name: 'Ponnur Valley', mandal: 'Ponnur', district: 'Guntur', gram_panchayat: 'Ponnur GP', lat: 16.0700, lon: 80.5600 },
-    ];
+    const villagesPath = path.resolve(process.cwd(), 'src/data/ap_villages.json');
+    let villages = [];
+    if (fs.existsSync(villagesPath)) {
+      villages = JSON.parse(fs.readFileSync(villagesPath, 'utf8'));
+    } else {
+      villages = [
+        { name: 'Guntur Rural', mandal: 'Guntur', district: 'Guntur', gram_panchayat: 'Guntur GP', latitude: 16.3067, longitude: 80.4365 },
+        { name: 'Tenali North', mandal: 'Tenali', district: 'Guntur', gram_panchayat: 'Tenali GP', latitude: 16.2430, longitude: 80.6400 },
+        { name: 'Mangalagiri East', mandal: 'Mangalagiri', district: 'Guntur', gram_panchayat: 'Mangalagiri GP', latitude: 16.4300, longitude: 80.5500 },
+        { name: 'Amaravati Central', mandal: 'Amaravati', district: 'Palnadu', gram_panchayat: 'Amaravati GP', latitude: 16.5800, longitude: 80.3200 },
+        { name: 'Bapatla Coastal', mandal: 'Bapatla', district: 'Bapatla', gram_panchayat: 'Bapatla GP', latitude: 15.9000, longitude: 80.4700 },
+        { name: 'Ponnur Valley', mandal: 'Ponnur', district: 'Guntur', gram_panchayat: 'Ponnur GP', latitude: 16.0700, longitude: 80.5600 },
+      ];
+    }
 
     for (const v of villages) {
       await tx.query(`
         INSERT INTO villages (name, mandal, district, gram_panchayat, latitude, longitude, is_demo)
         VALUES ($1, $2, $3, $4, $5, $6, false)
-        ON CONFLICT DO NOTHING
-      `, [v.name, v.mandal, v.district, v.gram_panchayat, v.lat, v.lon]);
+        ON CONFLICT (name, mandal) DO UPDATE SET
+          district = EXCLUDED.district,
+          gram_panchayat = COALESCE(EXCLUDED.gram_panchayat, villages.gram_panchayat),
+          latitude = COALESCE(EXCLUDED.latitude, villages.latitude),
+          longitude = COALESCE(EXCLUDED.longitude, villages.longitude)
+      `, [v.name, v.mandal, v.district, v.gram_panchayat, v.latitude || (v as any).lat, v.longitude || (v as any).lon]);
     }
 
     // 2. Water Source Types

@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+import twilio from 'twilio';
 import { Request, Response } from 'express';
 import { db, withTransaction } from '../../db/index.js';
 import { AppError } from '../../middleware/errorHandler.js';
@@ -9,7 +11,12 @@ import {
   updateFarmerSchema,
   createContactSchema,
   recordConsentSchema,
+  sendOtpSchema,
+  verifyOtpSchema,
 } from './schemas.js';
+
+// In-memory OTP storage fallback
+const otpStore = new Map<string, { hash: string; expiresAt: number; attempts: number }>();
 
 export async function listFarmers(req: Request, res: Response): Promise<void> {
   const { search, village_id, status, data_origin } = req.query;
@@ -22,9 +29,14 @@ export async function listFarmers(req: Request, res: Response): Promise<void> {
     SELECT f.id, f.farmer_code, f.full_name, f.village_id, v.name as village_name,
            v.mandal, v.district, f.gram_panchayat, f.preferred_language,
            f.call_window_start, f.call_window_end, f.status, f.data_source, f.data_origin,
-           f.notes, f.created_at,
+           f.notes, f.created_at, f.updated_at,
+           COALESCE(f.phone_verified, false) as phone_verified,
            c.phone_e164 as primary_phone,
-           (SELECT COUNT(*)::int FROM plots p WHERE p.farmer_id = f.id AND p.is_active = true) as active_plots_count
+           (SELECT COUNT(*)::int FROM plots p WHERE p.farmer_id = f.id AND p.is_active = true) as active_plots_count,
+           (SELECT p.area_acres FROM plots p WHERE p.farmer_id = f.id AND p.is_active = true ORDER BY p.created_at ASC LIMIT 1) as land_area_acres,
+           (SELECT cr.name FROM seasons s JOIN crops cr ON s.crop_id = cr.id WHERE s.farmer_id = f.id ORDER BY s.created_at DESC LIMIT 1) as crop_name,
+           (SELECT cr.id FROM seasons s JOIN crops cr ON s.crop_id = cr.id WHERE s.farmer_id = f.id ORDER BY s.created_at DESC LIMIT 1) as crop_id,
+           (SELECT wst.code FROM plots p JOIN plot_water_sources pws ON p.id = pws.plot_id JOIN water_source_types wst ON pws.water_source_type_id = wst.id WHERE p.farmer_id = f.id ORDER BY p.created_at ASC LIMIT 1) as water_source
     FROM farmers f
     JOIN villages v ON f.village_id = v.id
     LEFT JOIN farmer_contacts c ON f.id = c.farmer_id AND c.type = 'primary' AND c.is_active = true
@@ -41,8 +53,9 @@ export async function listFarmers(req: Request, res: Response): Promise<void> {
     query += ` AND f.village_id = ANY($${params.length})`;
   }
 
-  if (village_id) {
-    params.push(village_id);
+  const villageFilter = village_id || req.query.villageId;
+  if (villageFilter) {
+    params.push(villageFilter);
     query += ` AND f.village_id = $${params.length}`;
   }
 
@@ -81,7 +94,12 @@ export async function getFarmer(req: Request, res: Response): Promise<void> {
   const scopedVillages = getScopedVillageFilter(user);
 
   const farmerRes = await db.query(`
-    SELECT f.*, v.name as village_name, v.mandal, v.district
+    SELECT f.*, v.name as village_name, v.mandal, v.district,
+           COALESCE(f.phone_verified, false) as phone_verified,
+           (SELECT p.area_acres FROM plots p WHERE p.farmer_id = f.id AND p.is_active = true ORDER BY p.created_at ASC LIMIT 1) as land_area_acres,
+           (SELECT cr.name FROM seasons s JOIN crops cr ON s.crop_id = cr.id WHERE s.farmer_id = f.id ORDER BY s.created_at DESC LIMIT 1) as crop_name,
+           (SELECT cr.id FROM seasons s JOIN crops cr ON s.crop_id = cr.id WHERE s.farmer_id = f.id ORDER BY s.created_at DESC LIMIT 1) as crop_id,
+           (SELECT wst.code FROM plots p JOIN plot_water_sources pws ON p.id = pws.plot_id JOIN water_source_types wst ON pws.water_source_type_id = wst.id WHERE p.farmer_id = f.id ORDER BY p.created_at ASC LIMIT 1) as water_source
     FROM farmers f
     JOIN villages v ON f.village_id = v.id
     WHERE f.id = $1
@@ -153,9 +171,26 @@ export async function getFarmer(req: Request, res: Response): Promise<void> {
     phone_e164: maskPhone(c.phone_e164, role),
   }));
 
+  const primaryContact = contactsRes.rows.find(c => c.type === 'primary');
+
+  // Fetch summary counts for the farmer profile
+  const countsRes = await db.query(`
+    SELECT
+      (SELECT COUNT(*)::int FROM certificates WHERE farmer_id = $1) as certificates_count,
+      (SELECT COUNT(*)::int FROM call_attempts WHERE farmer_id = $1) +
+      (SELECT COUNT(*)::int FROM communication_logs WHERE farmer_id = $1 AND id NOT IN (SELECT communication_log_id FROM call_attempts WHERE communication_log_id IS NOT NULL)) as communications_count,
+      (SELECT COUNT(*)::int FROM field_surveys WHERE farmer_id = $1) as surveys_count,
+      (SELECT COUNT(*)::int FROM seasons WHERE farmer_id = $1 AND status = 'active') as active_seasons_count,
+      (SELECT COUNT(*)::int FROM seasons WHERE farmer_id = $1) as total_seasons_count
+  `, [id]);
+  const counts = countsRes.rows[0] || {};
+
   res.json({
     data: {
       ...farmer,
+      ...counts,
+      primary_phone: primaryContact ? maskPhone(primaryContact.phone_e164, role) : null,
+      primary_phone_raw: role === 'ADMIN' || role === 'CSP_MEMBER' ? primaryContact?.phone_e164 : undefined,
       contacts: maskedContacts,
       consents: consentsRes.rows,
       plots: plotsRes.rows,
@@ -175,9 +210,10 @@ export async function createFarmer(req: Request, res: Response): Promise<void> {
       INSERT INTO farmers (
         farmer_code, full_name, village_id, address, gram_panchayat,
         preferred_language, call_window_start, call_window_end,
-        status, data_source, data_origin, notes, created_by
+        status, data_source, data_origin, notes, created_by,
+        phone_verified
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12, false)
       RETURNING *
     `, [
       farmerCode, data.full_name, data.village_id, data.address || null, data.gram_panchayat || null,
@@ -189,7 +225,7 @@ export async function createFarmer(req: Request, res: Response): Promise<void> {
     // 2. Insert Primary Contact
     await tx.query(`
       INSERT INTO farmer_contacts (farmer_id, phone_e164, type, is_active, is_verified)
-      VALUES ($1, $2, 'primary', true, true)
+      VALUES ($1, $2, 'primary', true, false)
     `, [farmer.id, normalizedPhone]);
 
     // 3. Record Initial Consents
@@ -236,25 +272,159 @@ export async function updateFarmer(req: Request, res: Response): Promise<void> {
     throw new AppError('Forbidden: You do not have permission to modify farmers in this village.', 403, 'FORBIDDEN');
   }
 
-  const fullName = updates.full_name ?? before.full_name;
-  const villageId = updates.village_id ?? before.village_id;
-  const address = updates.address !== undefined ? updates.address : before.address;
-  const gramPanchayat = updates.gram_panchayat !== undefined ? updates.gram_panchayat : before.gram_panchayat;
-  const preferredLang = updates.preferred_language ?? before.preferred_language;
-  const callStart = updates.call_window_start ?? before.call_window_start;
-  const callEnd = updates.call_window_end ?? before.call_window_end;
-  const notes = updates.notes !== undefined ? updates.notes : before.notes;
+  const updatedFarmer = await withTransaction(async (tx) => {
+    // 1. Resolve Village if specified
+    let targetVillageId = before.village_id;
+    const villageInput = updates.village_id || updates.village;
+    if (villageInput) {
+      const vRes = await tx.query(`SELECT id FROM villages WHERE id::text = $1 OR name ILIKE $1 LIMIT 1`, [villageInput]);
+      if (vRes.rows.length > 0) {
+        targetVillageId = vRes.rows[0].id;
+      }
+    }
 
-  const resFarmer = await db.query(`
-    UPDATE farmers
-    SET full_name = $1, village_id = $2, address = $3, gram_panchayat = $4,
-        preferred_language = $5, call_window_start = $6, call_window_end = $7,
-        notes = $8, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $9
-    RETURNING *
-  `, [fullName, villageId, address, gramPanchayat, preferredLang, callStart, callEnd, notes, id]);
+    // 2. Update Farmers table
+    const fullName = updates.full_name || updates.name || before.full_name;
+    const address = updates.address !== undefined ? updates.address : before.address;
+    const gramPanchayat = updates.gram_panchayat !== undefined ? updates.gram_panchayat : before.gram_panchayat;
+    const preferredLang = updates.preferred_language ?? before.preferred_language;
+    const callStart = updates.call_window_start ?? before.call_window_start;
+    const callEnd = updates.call_window_end ?? before.call_window_end;
+    const notes = updates.notes !== undefined ? updates.notes : before.notes;
 
-  const after = resFarmer.rows[0];
+    const resFarmer = await tx.query(`
+      UPDATE farmers
+      SET full_name = $1, village_id = $2, address = $3, gram_panchayat = $4,
+          preferred_language = $5, call_window_start = $6, call_window_end = $7,
+          notes = $8, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9
+      RETURNING *
+    `, [fullName, targetVillageId, address, gramPanchayat, preferredLang, callStart, callEnd, notes, id]);
+
+    let farmerRow = resFarmer.rows[0];
+
+    // 3. Handle Phone update (Reset phone_verified to false if changed)
+    const phoneInput = updates.phone || updates.phone_number;
+    if (phoneInput) {
+      const normalizedPhone = normalizePhone(phoneInput);
+      const contactRes = await tx.query(
+        `SELECT id, phone_e164 FROM farmer_contacts WHERE farmer_id = $1 AND type = 'primary' LIMIT 1`,
+        [id]
+      );
+
+      if (contactRes.rows.length === 0 || contactRes.rows[0].phone_e164 !== normalizedPhone) {
+        // Phone number changed: reset phone_verified to false
+        const fUp = await tx.query(
+          `UPDATE farmers SET phone_verified = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
+          [id]
+        );
+        farmerRow = fUp.rows[0];
+
+        if (contactRes.rows.length > 0) {
+          await tx.query(
+            `UPDATE farmer_contacts
+             SET phone_e164 = $1, is_verified = false, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [normalizedPhone, contactRes.rows[0].id]
+          );
+        } else {
+          await tx.query(
+            `INSERT INTO farmer_contacts (farmer_id, phone_e164, type, is_active, is_verified)
+             VALUES ($1, $2, 'primary', true, false)`,
+            [id, normalizedPhone]
+          );
+        }
+      }
+    }
+
+    // 4. Handle Land Area (Acres)
+    let plotId: string | null = null;
+    const plotRes = await tx.query(
+      `SELECT id FROM plots WHERE farmer_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1`,
+      [id]
+    );
+
+    if (updates.land_area_acres !== undefined) {
+      if (plotRes.rows.length > 0) {
+        plotId = plotRes.rows[0].id;
+        await tx.query(
+          `UPDATE plots SET area_acres = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [updates.land_area_acres, plotId]
+        );
+      } else {
+        const newPlot = await tx.query(
+          `INSERT INTO plots (farmer_id, label, area_acres) VALUES ($1, 'Main Plot', $2) RETURNING id`,
+          [id, updates.land_area_acres]
+        );
+        plotId = newPlot.rows[0].id;
+      }
+
+      // Update active season area snapshot
+      await tx.query(
+        `UPDATE seasons SET area_acres_snapshot = $1, updated_at = CURRENT_TIMESTAMP WHERE farmer_id = $2 AND status = 'active'`,
+        [updates.land_area_acres, id]
+      );
+    } else if (plotRes.rows.length > 0) {
+      plotId = plotRes.rows[0].id;
+    }
+
+    // 5. Handle Water Source
+    if (updates.water_source) {
+      const wstRes = await tx.query(
+        `SELECT id FROM water_source_types WHERE code = $1 OR id::text = $1 LIMIT 1`,
+        [updates.water_source]
+      );
+      if (wstRes.rows.length > 0) {
+        const wstId = wstRes.rows[0].id;
+        if (!plotId) {
+          const newPlot = await tx.query(
+            `INSERT INTO plots (farmer_id, label, area_acres) VALUES ($1, 'Main Plot', 1.0) RETURNING id`,
+            [id]
+          );
+          plotId = newPlot.rows[0].id;
+        }
+
+        const pwsRes = await tx.query(
+          `SELECT id FROM plot_water_sources WHERE plot_id = $1 AND is_primary = true LIMIT 1`,
+          [plotId]
+        );
+        if (pwsRes.rows.length > 0) {
+          await tx.query(
+            `UPDATE plot_water_sources SET water_source_type_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [wstId, pwsRes.rows[0].id]
+          );
+        } else {
+          await tx.query(
+            `INSERT INTO plot_water_sources (plot_id, water_source_type_id, is_primary) VALUES ($1, $2, true)`,
+            [plotId, wstId]
+          );
+        }
+      }
+    }
+
+    // 6. Handle Crop Type
+    if (updates.crop_type) {
+      const crRes = await tx.query(
+        `SELECT id FROM crops WHERE id::text = $1 OR name ILIKE $1 OR name_te ILIKE $1 LIMIT 1`,
+        [updates.crop_type]
+      );
+      if (crRes.rows.length > 0) {
+        const cropId = crRes.rows[0].id;
+        const seasonRes = await tx.query(
+          `SELECT id FROM seasons WHERE farmer_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
+          [id]
+        );
+        if (seasonRes.rows.length > 0) {
+          await tx.query(
+            `UPDATE seasons SET crop_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [cropId, seasonRes.rows[0].id]
+          );
+        }
+      }
+    }
+
+    return farmerRow;
+  });
 
   await recordAudit({
     userId: req.user?.id,
@@ -262,11 +432,162 @@ export async function updateFarmer(req: Request, res: Response): Promise<void> {
     entityType: 'farmers',
     entityId: id,
     before: { full_name: before.full_name, village_id: before.village_id },
-    after: { full_name: after.full_name, village_id: after.village_id },
+    after: { full_name: updatedFarmer.full_name, village_id: updatedFarmer.village_id },
     req,
   });
 
-  res.json({ data: after });
+  res.json({ data: updatedFarmer });
+}
+
+export async function sendFarmerOtp(req: Request, res: Response): Promise<void> {
+  const data = sendOtpSchema.parse(req.body);
+  const normalizedPhone = normalizePhone(data.phone);
+
+  // Generate 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const hash = crypto.createHash('sha256').update(otp).digest('hex');
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+  // In-memory store
+  otpStore.set(normalizedPhone, { hash, expiresAt, attempts: 0 });
+
+  // Update in DB if farmer exists
+  let farmerId = data.farmerId;
+  if (!farmerId) {
+    const fRes = await db.query(
+      `SELECT f.id FROM farmers f JOIN farmer_contacts fc ON f.id = fc.farmer_id WHERE fc.phone_e164 = $1 LIMIT 1`,
+      [normalizedPhone]
+    );
+    if (fRes.rows.length > 0) {
+      farmerId = fRes.rows[0].id;
+    }
+  }
+
+  if (farmerId) {
+    await db.query(
+      `UPDATE farmers
+       SET otp_code_hash = $1,
+           otp_expires_at = NOW() + INTERVAL '10 minutes',
+           otp_attempts = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [hash, farmerId]
+    );
+  }
+
+  let smsSent = false;
+  let smsError: string | null = null;
+
+  if (data.mode === 'live') {
+    const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+    const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+    const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
+
+    if (twilioAccountSid && twilioAuthToken && twilioPhone) {
+      try {
+        const client = twilio(twilioAccountSid, twilioAuthToken);
+        const messageBody = `స్మార్ట్ సాగు నీటి సలహా వ్యవస్థ: మీ ధృవీకరణ కోడ్ ${otp}. ఇది 10 నిమిషాలు మాత్రమే చెల్లుతుంది. / Smart Irrigation Advisory OTP: ${otp}. Valid for 10 min.`;
+        await client.messages.create({
+          to: normalizedPhone,
+          from: twilioPhone,
+          body: messageBody,
+        });
+        smsSent = true;
+      } catch (err: any) {
+        smsError = err.message || 'SMS delivery failed';
+        console.error('Twilio OTP SMS delivery error:', err);
+      }
+    } else {
+      smsError = 'Twilio not configured for live SMS delivery.';
+    }
+  }
+
+  res.json({
+    success: true,
+    message: smsSent ? 'OTP sent via SMS' : (data.mode === 'live' ? `OTP simulated (${smsError})` : 'OTP sent (Simulation)'),
+    phone: normalizedPhone,
+    mode: data.mode,
+    expiresInSeconds: 600,
+    ...(data.mode === 'simulation' || process.env.NODE_ENV !== 'production' ? { devOtp: otp } : {}),
+  });
+}
+
+export async function verifyFarmerOtp(req: Request, res: Response): Promise<void> {
+  const data = verifyOtpSchema.parse(req.body);
+  const normalizedPhone = normalizePhone(data.phone);
+  const submittedHash = crypto.createHash('sha256').update(data.otp).digest('hex');
+
+  let stored = otpStore.get(normalizedPhone);
+
+  let dbFarmer: any = null;
+  if (data.farmerId) {
+    const fRes = await db.query(`SELECT id, otp_code_hash, otp_expires_at, otp_attempts FROM farmers WHERE id = $1`, [data.farmerId]);
+    if (fRes.rows.length > 0) dbFarmer = fRes.rows[0];
+  } else {
+    const fRes = await db.query(
+      `SELECT f.id, f.otp_code_hash, f.otp_expires_at, f.otp_attempts
+       FROM farmers f
+       JOIN farmer_contacts fc ON f.id = fc.farmer_id
+       WHERE fc.phone_e164 = $1
+       LIMIT 1`,
+      [normalizedPhone]
+    );
+    if (fRes.rows.length > 0) dbFarmer = fRes.rows[0];
+  }
+
+  const hashToMatch = dbFarmer?.otp_code_hash || stored?.hash;
+  const attempts = (dbFarmer?.otp_attempts ?? stored?.attempts ?? 0);
+  const expiresAtTime = dbFarmer?.otp_expires_at ? new Date(dbFarmer.otp_expires_at).getTime() : stored?.expiresAt;
+
+  if (!hashToMatch) {
+    throw new AppError('No OTP was requested for this phone number or it has expired.', 400, 'INVALID_OTP');
+  }
+
+  if (attempts >= 3) {
+    throw new AppError('Too many failed attempts. Please request a new OTP.', 400, 'MAX_ATTEMPTS_EXCEEDED');
+  }
+
+  if (expiresAtTime && Date.now() > expiresAtTime) {
+    throw new AppError('OTP has expired. Please request a new OTP.', 400, 'OTP_EXPIRED');
+  }
+
+  if (submittedHash !== hashToMatch) {
+    if (stored) stored.attempts += 1;
+    if (dbFarmer) {
+      await db.query(`UPDATE farmers SET otp_attempts = otp_attempts + 1 WHERE id = $1`, [dbFarmer.id]);
+    }
+    const remaining = 3 - (attempts + 1);
+    throw new AppError(`Invalid OTP. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`, 400, 'INVALID_OTP');
+  }
+
+  // OTP Verified Successfully
+  otpStore.delete(normalizedPhone);
+
+  if (dbFarmer) {
+    await db.query(
+      `UPDATE farmers
+       SET phone_verified = true,
+           otp_code_hash = NULL,
+           otp_expires_at = NULL,
+           otp_attempts = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [dbFarmer.id]
+    );
+
+    await db.query(
+      `UPDATE farmer_contacts
+       SET is_verified = true, updated_at = CURRENT_TIMESTAMP
+       WHERE farmer_id = $1 AND phone_e164 = $2`,
+      [dbFarmer.id, normalizedPhone]
+    );
+  }
+
+  res.json({
+    success: true,
+    message: 'Phone number verified successfully.',
+    phone_verified: true,
+  });
 }
 
 export async function deactivateFarmer(req: Request, res: Response): Promise<void> {

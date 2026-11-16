@@ -42,10 +42,17 @@ export interface ImmutableSeasonSnapshot {
     totalEffectiveRainM3: number;
     netIrrigationDemandMm: number;
     netIrrigationDemandM3: number;
+    grossRecommendedM3?: number | null;
+    grossRecommendedLitres?: number | null;
     totalAppliedLitres: number;
     totalAppliedM3: number;
     totalAppliedMm: number;
-    waterUseRatio: number;
+    waterSavedM3?: number | null;
+    waterSavedLitres?: number | null;
+    waterSavedPercentage?: number | null;
+    waterProductivityKgPerM3?: number | null;
+    netProfitInr?: number | null;
+    waterUseRatio: number | null;
     ratioBand: WaterUseRatioBand;
     confidenceScore: number;
     confidenceBand: ConfidenceBand;
@@ -53,17 +60,34 @@ export interface ImmutableSeasonSnapshot {
     hasUnvalidatedAssumptions: boolean;
     unvalidatedAssumptionsList: string[];
     anomalyFlags: string[];
+    calculationMethodology?: string;
   };
   irrigationRecordsSummary: {
     totalLogsCount: number;
     totalHoursReported: number;
     totalEstimatedVolumeL: number;
+    measurementType?: string;
   };
   feedbackSummary: {
     totalCyclesRecorded: number;
     rainClassesReported: string[];
   };
+  dataOrigin?: string;
+  reportingPeriod?: string;
   snapshotGeneratedAt: string;
+}
+
+export type CertificateStatus = 'active' | 'sealed' | 'revoked';
+
+export interface CertificateStatusHistory {
+  id: string;
+  certificateId: string;
+  previousStatus: string;
+  newStatus: string;
+  reason: string;
+  changedBy?: string | null;
+  changedByName?: string | null;
+  createdAt: string;
 }
 
 export interface CertificateRecord {
@@ -73,7 +97,7 @@ export interface CertificateRecord {
   farmerId: string;
   plotId: string;
   cropId: string;
-  waterUseRatio: number;
+  waterUseRatio: number | null;
   waterUseRatioBand: WaterUseRatioBand;
   confidenceScore: number;
   confidenceBand: ConfidenceBand;
@@ -88,6 +112,10 @@ export interface CertificateRecord {
   replacesCertificateId?: string | null;
   replacedByCertificateId?: string | null;
   version: number;
+  status?: CertificateStatus;
+  sealedAt?: string | null;
+  sealedReason?: string | null;
+  sealedBy?: string | null;
   isRevoked: boolean;
   revokedAt?: string | null;
   revocationReason?: string | null;
@@ -138,7 +166,7 @@ export interface SeasonReportRecord {
   monitoringCycleCoverage: number;
   confidenceScore: number;
   confidenceBand: ConfidenceBand;
-  waterUseRatio: number;
+  waterUseRatio: number | null;
   waterUseRatioBand: WaterUseRatioBand;
   isCertificateEligible: boolean;
   ineligibilityReasons: string[];
@@ -161,6 +189,7 @@ export interface PublicVerificationResult {
   status: 'valid' | 'revoked';
   isValid: boolean;
   isRevoked: boolean;
+  isDemo: boolean;
   revocationReason?: string | null;
   sha256Validated: boolean;
 }

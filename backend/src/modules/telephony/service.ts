@@ -149,23 +149,34 @@ export class TelephonyService {
 
     this.activeSessions.set(params.sessionId, state);
 
-    // 3. Persist call attempt in database if scheduleId exists
+    // 3. Persist call attempt in database with farmer and season integrity
+    let attemptNum = 1;
     if (params.callScheduleId) {
       const countRes = await db.query(
         `SELECT COUNT(*) as count FROM call_attempts WHERE call_schedule_id = $1`,
         [params.callScheduleId]
       );
-      const attemptNum = parseInt(countRes.rows[0]?.count || '0', 10) + 1;
+      attemptNum = parseInt(countRes.rows[0]?.count || '0', 10) + 1;
+    }
 
-      await db.query(
-        `INSERT INTO call_attempts (
-          id, call_schedule_id, attempt_number, provider, provider_call_sid, status, started_at
-        )
-        VALUES (gen_random_uuid(), $1, $2, $3, $4, 'in_progress', NOW())
-        ON CONFLICT (provider_call_sid) DO NOTHING`,
-        [params.callScheduleId, attemptNum, params.provider, params.sessionId]
-      );
+    await db.query(
+      `INSERT INTO call_attempts (
+        id, call_schedule_id, attempt_number, provider, provider_call_sid, phone_e164, status, started_at, farmer_id, season_id
+      )
+      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'in_progress', NOW(), $6, $7)
+      ON CONFLICT (provider_call_sid) DO NOTHING`,
+      [
+        params.callScheduleId || null,
+        attemptNum,
+        params.provider,
+        params.sessionId,
+        phoneE164 || null,
+        farmerId || null,
+        seasonId || null,
+      ]
+    );
 
+    if (params.callScheduleId) {
       await db.query(
         `UPDATE call_schedule
          SET status = 'in_progress', attempt_count = attempt_count + 1, last_attempt_at = NOW()
@@ -578,6 +589,12 @@ export class TelephonyService {
              WHERE c.farmer_id = cs.farmer_id
                AND c.channel = 'voice'
                AND c.status = 'withdrawn'
+           )
+           -- Phone verification check: Only dispatch calls to verified phone numbers
+           AND EXISTS (
+             SELECT 1 FROM farmers f
+             WHERE f.id = cs.farmer_id
+               AND COALESCE(f.phone_verified, false) = true
            )
            -- Daily cap check: Max 1 call attempt per farmer per day
            AND NOT EXISTS (

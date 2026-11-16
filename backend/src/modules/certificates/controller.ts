@@ -27,11 +27,16 @@ export class CertificateController {
    */
   async issueCertificate(req: Request, res: Response): Promise<void> {
     try {
-      const seasonId = req.params.seasonId as string;
+      const seasonId = (req.params.seasonId || req.body.seasonId || req.body.season_id) as string;
       const actualHarvestDate = req.body.actualHarvestDate || req.body.actual_harvest_date;
       const yieldQuantity = req.body.yieldQuantity !== undefined ? req.body.yieldQuantity : req.body.yield_value;
       const yieldUnit = req.body.yieldUnit || req.body.yield_unit;
       const completionNotes = req.body.completionNotes || req.body.harvest_notes;
+
+      if (!seasonId) {
+        res.status(400).json({ success: false, error: 'seasonId is required' });
+        return;
+      }
 
       if (!actualHarvestDate) {
         res.status(400).json({ success: false, error: 'actualHarvestDate is required' });
@@ -134,15 +139,17 @@ export class CertificateController {
 
   /**
    * GET /api/v1/certificates
-   * Lists certificates with village scoping.
+   * Lists certificates with village scoping, farmer filtering, and search.
    */
   async listCertificates(req: Request, res: Response): Promise<void> {
     try {
       const scopedVillages = getScopedVillageFilter(req.user);
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
+      const farmerId = (req.query.farmerId || req.query.farmer_id) as string | undefined;
+      const search = req.query.search as string | undefined;
 
-      const result = await certificateService.listCertificates(scopedVillages, { page, limit });
+      const result = await certificateService.listCertificates(scopedVillages, { page, limit, farmerId, search });
       res.status(200).json({ success: true, ...result });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -304,14 +311,15 @@ export class CertificateController {
       }
 
       // Stream existing PDF or generate on demand
+      const filename = `certificate-${cert.certificateCode}-v${cert.version || 1}.pdf`;
       if (cert.pdfPath && fs.existsSync(cert.pdfPath)) {
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename="${cert.certificateCode}.pdf"`);
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
         fs.createReadStream(cert.pdfPath).pipe(res);
       } else {
         const buffer = await pdfCertificateService.generateCertificatePdf(cert);
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename="${cert.certificateCode}.pdf"`);
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
         res.send(buffer);
       }
     } catch (err: any) {
@@ -341,6 +349,41 @@ export class CertificateController {
   }
 
   /**
+   * POST /api/v1/certificates/:id/seal
+   * Admin-only sealing of a certificate to lock its state permanently.
+   */
+  async sealCertificate(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const { reason } = req.body;
+
+      if (!reason || !reason.trim()) {
+        res.status(400).json({ success: false, error: 'Sealing reason is required' });
+        return;
+      }
+
+      const sealed = await certificateService.sealCertificate(id, reason, req.user?.id || 'admin');
+      res.status(200).json({ success: true, data: sealed });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * GET /api/v1/certificates/:id/history
+   * Retrieves status history audit trail for a certificate.
+   */
+  async getCertificateHistory(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const history = await certificateService.getCertificateHistory(id);
+      res.status(200).json({ success: true, data: history });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
    * POST /api/v1/certificates/:id/revoke
    * Admin-only revocation of a compromised or invalid certificate.
    */
@@ -356,6 +399,20 @@ export class CertificateController {
 
       const revoked = await certificateService.revokeCertificate(id, reason, req.user?.id || 'admin');
       res.status(200).json({ success: true, data: revoked });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * POST /api/v1/certificates/:id/regenerate
+   * Admin-only re-generation of certificate PDF preserving code, issue date and data.
+   */
+  async regenerateCertificate(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const cert = await certificateService.regenerateCertificate(id, req.user?.id);
+      res.status(200).json({ success: true, data: cert });
     } catch (err: any) {
       res.status(400).json({ success: false, error: err.message });
     }

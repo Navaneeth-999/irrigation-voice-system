@@ -340,8 +340,8 @@ export const SYSTEM_VOICE_PROMPTS = {
 export const ALERT_VOICE_PROMPTS = {
   rain_expected: {
     promptCode: 'prompt_alert_rain_expected',
-    teluguText: 'నమస్కారం రైతు సోదరులకు. జలమిత్ర వాతావరణ సమాచారం. రాబోయే 24 నుండి 48 గంటల్లో మీ ప్రాంతంలో వర్షం కురిసే అవకాశం ఉంది. నీరు వృధా కాకుండా నీటిపారుదల వాయిదా వేసుకోవాల్సిందిగా సూచిస్తున్నాము. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
-    englishText: 'Namaskaram farmer. Jalamitra weather advisory. Rain is expected in your area in the next 24 to 48 hours. Please postpone irrigation to conserve water. Press 1 to acknowledge.',
+    teluguText: 'నమస్కారం రైతు సోదరులకు. స్మార్ట్ సాగు నీటి సలహా వాతావరణ సమాచారం. రాబోయే 24 నుండి 48 గంటల్లో మీ ప్రాంతంలో వర్షం కురిసే అవకాశం ఉంది. నీరు వృధా కాకుండా నీటిపారుదల వాయిదా వేసుకోవాల్సిందిగా సూచిస్తున్నాము. వివరాలు విన్నట్లయితే 1 నొక్కండి.',
+    englishText: 'Namaskaram farmer. Smart Irrigation weather advisory. Rain is expected in your area in the next 24 to 48 hours. Please postpone irrigation to conserve water. Press 1 to acknowledge.',
     audioUrl: '/storage/audio/prompts/alert_rain_expected_te.mp3',
   },
   heavy_rain: {

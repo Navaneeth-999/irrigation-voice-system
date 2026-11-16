@@ -3,9 +3,13 @@ import { config } from './config/index.js';
 import { runMigrations } from './scripts/migrate.js';
 import { seedReferenceData } from './scripts/seed-reference.js';
 import { createAdminUser } from './scripts/create-admin.js';
+import { verifyDatabaseConnection } from './db/index.js';
 
 async function bootstrap() {
   console.log('🌱 Starting Irrigation Management Backend...');
+
+  // Verify database connection before running migrations or accepting traffic
+  await verifyDatabaseConnection();
 
   // Auto-run migrations in development or on bootstrap
   try {

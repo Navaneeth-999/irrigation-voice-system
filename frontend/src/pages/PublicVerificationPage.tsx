@@ -10,9 +10,11 @@ import {
   Hash,
   ExternalLink,
   Award,
+  AlertTriangle,
 } from 'lucide-react';
 import { Card } from '../components/ui/Card.js';
 import { Badge } from '../components/ui/Badge.js';
+import { APP_NAME, APP_NAME_TE, ORG_NAME } from '../config/branding.js';
 
 interface PublicVerificationData {
   certificateNumber: string;
@@ -23,6 +25,7 @@ interface PublicVerificationData {
   status: 'valid' | 'revoked';
   isValid: boolean;
   isRevoked: boolean;
+  isDemo?: boolean;
   revocationReason?: string | null;
   sha256Validated: boolean;
 }
@@ -65,13 +68,13 @@ export const PublicVerificationPage: React.FC = () => {
           </div>
           <div>
             <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              జలమిత్ర <span className="text-sm font-normal text-forest-300">Public Verification</span>
+              {APP_NAME_TE} <span className="text-sm font-normal text-forest-300">Public Verification</span>
             </h1>
-            <p className="text-xs text-forest-400">Official Conservation Certificate Registry • B.Tech CSP</p>
+            <p className="text-xs text-forest-400">Official Conservation Certificate Registry • {ORG_NAME}</p>
           </div>
         </div>
         <Link to="/login" className="text-xs text-forest-300 hover:text-white flex items-center gap-1">
-          <span>CSP Portal</span>
+          <span>Portal</span>
           <ExternalLink className="w-3.5 h-3.5" />
         </Link>
       </div>
@@ -114,6 +117,11 @@ export const PublicVerificationPage: React.FC = () => {
                           SHA-256 Validated
                         </span>
                       )}
+                      {data.isDemo && (
+                        <span className="bg-amber-500/20 text-amber-300 font-bold px-3 py-1 rounded-full text-xs uppercase tracking-wider border border-amber-400/40">
+                          DEMO / SIMULATED RECORD
+                        </span>
+                      )}
                     </div>
                     <h2 className="text-2xl sm:text-3xl font-bold text-white mt-1 font-mono">
                       {data.certificateNumber}
@@ -142,6 +150,14 @@ export const PublicVerificationPage: React.FC = () => {
               </div>
             )}
 
+            {/* Prominent Demo/Simulated Notice Banner */}
+            {data.isDemo && (
+              <div className="bg-amber-950/70 border-2 border-amber-500/60 rounded-xl p-3.5 text-center text-amber-200 text-xs font-semibold tracking-wide flex items-center justify-center gap-2 shadow-lg">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>DEMO / SIMULATED RECORD — Generated for academic demonstration & evaluation only</span>
+              </div>
+            )}
+
             {/* Exactly Limited Field Verification Card (User Directive 3) */}
             <Card className="p-6 bg-gray-900/90 border border-forest-800/80 text-gray-200 shadow-xl">
               <h3 className="text-xs font-bold text-forest-400 uppercase tracking-wider flex items-center gap-1.5 mb-4 border-b border-gray-800 pb-2">
@@ -150,6 +166,17 @@ export const PublicVerificationPage: React.FC = () => {
               </h3>
 
               <div className="space-y-3.5 text-sm">
+                {data.isDemo && (
+                  <div className="flex items-center justify-between border-b border-gray-800/80 pb-2.5">
+                    <span className="text-amber-400 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-400" />
+                      <span>Record Type:</span>
+                    </span>
+                    <span className="font-semibold text-amber-300 text-xs uppercase tracking-wider">
+                      SIMULATED / DEMO DATA
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between border-b border-gray-800/80 pb-2.5">
                   <span className="text-gray-400 flex items-center gap-2">
                     <Hash className="w-4 h-4 text-gray-500" />
@@ -218,7 +245,7 @@ export const PublicVerificationPage: React.FC = () => {
 
       {/* Footer */}
       <div className="max-w-3xl mx-auto w-full text-center text-xs text-gray-500 border-t border-forest-900 pt-4 mt-8">
-        Jalamitra Intelligent Irrigation & Conservation Platform • Andhra Pradesh Water Stewardship Initiative
+        {APP_NAME} • {ORG_NAME}
       </div>
     </div>
   );

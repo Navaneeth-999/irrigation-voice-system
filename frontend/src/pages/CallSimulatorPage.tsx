@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Phone,
   PhoneOff,
@@ -18,8 +18,18 @@ import {
   HelpCircle,
   Play,
   ArrowRight,
+  Radio,
+  Send,
+  MessageSquare,
+  AlertCircle,
+  Check,
+  Award,
+  Eye,
+  Info,
 } from 'lucide-react';
 import { apiRequest } from '../api/client.js';
+import { Modal } from '../components/ui/Modal.js';
+import { Button } from '../components/ui/Button.js';
 
 interface SeasonOption {
   id: string;
@@ -59,18 +69,70 @@ interface AudioPrompt {
 
 export const CallSimulatorPage: React.FC = () => {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlFarmerId = searchParams.get('farmerId') || '';
 
-  // Active Seasons
-  const { data: seasons = [] } = useQuery<SeasonOption[]>({
-    queryKey: ['active-seasons'],
-    queryFn: async () => {
-      const res = await apiRequest<SeasonOption[]>('/seasons?status=active');
-      return res || [];
-    },
+  // Tab State: 'simulator' | 'live' | 'prompts'
+  const [activeTab, setActiveTab] = useState<'simulator' | 'live' | 'prompts'>('simulator');
+
+  // Authorized Farmers List
+  const { data: farmersData } = useQuery<any>({
+    queryKey: ['authorized-farmers'],
+    queryFn: async () => apiRequest<any>('/farmers?limit=200'),
   });
+  const farmers: any[] = (Array.isArray(farmersData) ? farmersData : farmersData?.data) || [];
 
+  const [selectedFarmerId, setSelectedFarmerId] = useState<string>(urlFarmerId);
   const [selectedSeasonId, setSelectedSeasonId] = useState<string>('');
   const [phoneNumber, setPhoneNumber] = useState<string>('+919876543210');
+
+  // Sync selectedFarmerId when URL param changes
+  useEffect(() => {
+    if (urlFarmerId && urlFarmerId !== selectedFarmerId) {
+      setSelectedFarmerId(urlFarmerId);
+    }
+  }, [urlFarmerId]);
+
+  // Default to first demo farmer or first farmer if none selected
+  useEffect(() => {
+    if (!selectedFarmerId && farmers.length > 0) {
+      const defaultFarmer = farmers.find((f: any) => f.data_origin === 'demo') || farmers[0];
+      setSelectedFarmerId(defaultFarmer.id);
+    }
+  }, [farmers, selectedFarmerId]);
+
+  const selectedFarmer = farmers.find((f: any) => f.id === selectedFarmerId);
+
+  // Auto-fill phone when selected farmer changes
+  useEffect(() => {
+    if (selectedFarmer?.primary_phone) {
+      setPhoneNumber(selectedFarmer.primary_phone);
+    }
+  }, [selectedFarmer]);
+
+  // Farmer's Seasons (both active and past)
+  const { data: farmerSeasonsData = [] } = useQuery<any>({
+    queryKey: ['farmer-seasons', selectedFarmerId],
+    queryFn: async () => {
+      if (!selectedFarmerId) return [];
+      const res = await apiRequest<any>(`/seasons?farmer_id=${selectedFarmerId}`);
+      return (Array.isArray(res) ? res : res?.data) || [];
+    },
+    enabled: !!selectedFarmerId,
+  });
+  const seasons: SeasonOption[] = farmerSeasonsData;
+
+  // Auto-select first active season (or first season) for the selected farmer
+  useEffect(() => {
+    if (seasons.length > 0) {
+      const active = seasons.find((s) => s.status === 'active') || seasons[0];
+      setSelectedSeasonId(active.id);
+    } else {
+      setSelectedSeasonId('');
+    }
+  }, [seasons]);
+
+  const selectedSeason = seasons.find((s) => s.id === selectedSeasonId);
 
   // Call Schedules for selected season
   const { data: schedules = [] } = useQuery<any[]>({
@@ -83,6 +145,9 @@ export const CallSimulatorPage: React.FC = () => {
     enabled: !!selectedSeasonId,
   });
 
+  const isPhoneVerified = selectedFarmer?.phone_verified ?? false;
+  const isDemoFarmer = selectedFarmer?.data_origin === 'demo';
+
   // Audio Prompts
   const { data: prompts = [], refetch: refetchPrompts } = useQuery<AudioPrompt[]>({
     queryKey: ['audio-prompts'],
@@ -92,7 +157,27 @@ export const CallSimulatorPage: React.FC = () => {
     },
   });
 
-  // Call State
+  // Call Logs
+  const { data: callLogs = [], refetch: refetchLogs } = useQuery<any[]>({
+    queryKey: ['telephony-logs'],
+    queryFn: async () => {
+      const res = await apiRequest<any[]>('/telephony/logs');
+      return res || [];
+    },
+  });
+
+  // Selected Call Attempt for Details Modal
+  const [selectedCallAttemptId, setSelectedCallAttemptId] = useState<string | null>(null);
+  const { data: callDetailsData, isLoading: isLoadingDetails } = useQuery<any>({
+    queryKey: ['call-attempt-details', selectedCallAttemptId],
+    queryFn: async () => {
+      if (!selectedCallAttemptId) return null;
+      return await apiRequest<any>(`/telephony/attempts/${selectedCallAttemptId}`);
+    },
+    enabled: !!selectedCallAttemptId,
+  });
+
+  // Simulator Call State
   const [callActive, setCallActive] = useState<boolean>(false);
   const [callStatus, setCallStatus] = useState<'idle' | 'calling' | 'connected' | 'completed' | 'opted_out'>('idle');
   const [sessionId, setSessionId] = useState<string>('');
@@ -100,17 +185,13 @@ export const CallSimulatorPage: React.FC = () => {
   const [callDuration, setCallDuration] = useState<number>(0);
   const [inputBuffer, setInputBuffer] = useState<string>('');
   const [transcript, setTranscript] = useState<Array<{ sender: 'system' | 'user'; text: string; time: string }>>([]);
-  const [activeTab, setActiveTab] = useState<'simulator' | 'prompts'>('simulator');
   const [reviewModalPrompt, setReviewModalPrompt] = useState<AudioPrompt | null>(null);
   const [reviewStatus, setReviewStatus] = useState<string>('approved');
   const [reviewNotes, setReviewNotes] = useState<string>('');
 
-  // Auto-select first active season
-  useEffect(() => {
-    if (seasons.length > 0 && !selectedSeasonId) {
-      setSelectedSeasonId(seasons[0].id);
-    }
-  }, [seasons, selectedSeasonId]);
+  // Live Call State
+  const [isLiveConfirmOpen, setIsLiveConfirmOpen] = useState(false);
+  const [liveCallResult, setLiveCallResult] = useState<any | null>(null);
 
   // Call duration counter
   useEffect(() => {
@@ -125,17 +206,16 @@ export const CallSimulatorPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [callActive, callStatus]);
 
-  const selectedSeason = seasons.find((s) => s.id === selectedSeasonId);
   const nextDueSchedule = schedules.find((s) => s.status === 'scheduled') || schedules[0];
 
-  // Start Call Mutation
+  // Start Simulator Call Mutation
   const startCallMutation = useMutation({
     mutationFn: async () => {
       return await apiRequest('/telephony/simulator/start', {
         method: 'POST',
         body: JSON.stringify({
-          seasonId: selectedSeasonId,
-          farmerId: selectedSeason?.farmer_id,
+          seasonId: selectedSeasonId || undefined,
+          farmerId: selectedFarmerId || selectedSeason?.farmer_id || undefined,
           scheduleId: nextDueSchedule?.id,
           phoneE164: phoneNumber,
         }),
@@ -155,7 +235,40 @@ export const CallSimulatorPage: React.FC = () => {
       ]);
     },
     onError: (err: any) => {
-      alert(`Failed to start call: ${err.message}`);
+      alert(`Failed to start simulator call: ${err.message}`);
+    },
+  });
+
+  // Start Live Call Mutation
+  const liveCallMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest('/telephony/call/live', {
+        method: 'POST',
+        body: JSON.stringify({
+          seasonId: selectedSeasonId || undefined,
+          farmerId: selectedFarmerId || selectedSeason?.farmer_id || undefined,
+          scheduleId: nextDueSchedule?.id || undefined,
+          phoneE164: phoneNumber?.trim() || undefined,
+        }),
+      });
+    },
+    onSuccess: (data: any) => {
+      setLiveCallResult(data);
+      setIsLiveConfirmOpen(false);
+      refetchLogs();
+    },
+    onError: (err: any) => {
+      setLiveCallResult({
+        success: false,
+        error: err.code || 'CALL_FAILED',
+        message: err.message,
+        fallbackSmsSent: Boolean(err.details?.fallbackSmsSent),
+        fallbackSmsContent: err.details?.fallbackSmsSent
+          ? err.details?.fallbackSmsContent || `నమస్కారం ${selectedFarmer?.full_name || selectedSeason?.farmer_name || 'రైతు సోదరులారా'}, స్మార్ట్ సాగు నీటి సలహా వ్యవస్థ నుండి మీ పంటకు సాగు నీటి సలహా: ప్రస్తుతం తగినంత తేమ ఉండేలా చూసుకోండి. వివరాలకు పంచాయతీని సంప్రదించండి.`
+          : null,
+      });
+      setIsLiveConfirmOpen(false);
+      refetchLogs();
     },
   });
 
@@ -292,41 +405,51 @@ export const CallSimulatorPage: React.FC = () => {
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-700/50 text-emerald-200 text-xs font-semibold uppercase tracking-wider mb-2">
               <PhoneCall className="w-3.5 h-3.5" />
-              Telugu IVR Voice Engine & Interactive Simulator
+              Telugu IVR Voice Engine & Outbound Telephony
             </div>
-            <h1 className="text-2xl font-bold">Farmer Telephony Simulator</h1>
+            <h1 className="text-2xl font-bold">Telephony & Voice Advisory Console</h1>
             <p className="text-emerald-100 text-sm mt-1 max-w-2xl">
-              Simulate automated fortnightly outbound phone calls to Andhra Pradesh farmers in Telugu.
-              Evaluate speech prompts, DTMF dialpad entries, skip branching rules, pump hours volume estimation, and downstream action items.
+              Conduct interactive simulated IVR call evaluations or place live cellular voice calls to registered Andhra Pradesh farmers via Twilio.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 bg-emerald-950/40 p-1.5 rounded-xl border border-emerald-700/40">
+          <div className="flex items-center gap-1.5 bg-emerald-950/50 p-1.5 rounded-xl border border-emerald-700/50">
             <button
               onClick={() => setActiveTab('simulator')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
                 activeTab === 'simulator'
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'text-emerald-200 hover:text-white'
               }`}
             >
-              Interactive Simulator
+              🎮 Simulation Mode
+            </button>
+            <button
+              onClick={() => setActiveTab('live')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+                activeTab === 'live'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-emerald-200 hover:text-white'
+              }`}
+            >
+              <Radio className="w-3.5 h-3.5" /> Live Mode (Twilio)
             </button>
             <button
               onClick={() => setActiveTab('prompts')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
                 activeTab === 'prompts'
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'text-emerald-200 hover:text-white'
               }`}
             >
-              Audio Prompts & Review ({prompts.length})
+              Prompts ({prompts.length})
             </button>
           </div>
         </div>
       </div>
 
       {activeTab === 'simulator' ? (
+        /* TAB 1: Simulation Mode */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* LEFT: Phone Simulator Device (5 cols) */}
           <div className="lg:col-span-5 flex justify-center">
@@ -361,12 +484,12 @@ export const CallSimulatorPage: React.FC = () => {
                     ></span>
                     <span className="text-stone-300 text-xs font-semibold uppercase tracking-wider">
                       {callStatus === 'connected'
-                        ? 'Call in Progress'
+                        ? 'Call in Progress (Simulated)'
                         : callStatus === 'opted_out'
                         ? 'Opted Out'
                         : callStatus === 'completed'
                         ? 'Call Completed'
-                        : 'Ready to Call'}
+                        : 'Simulator Ready'}
                     </span>
                   </div>
                   {callStatus === 'connected' && (
@@ -379,10 +502,10 @@ export const CallSimulatorPage: React.FC = () => {
                 {/* Farmer & Season Info Header */}
                 <div className="text-center mb-3">
                   <h3 className="text-stone-100 font-bold text-lg">
-                    {selectedSeason?.farmer_name || 'Select Farmer'}
+                    {selectedFarmer?.full_name || selectedSeason?.farmer_name || 'Select Farmer'}
                   </h3>
                   <p className="text-stone-400 text-xs">
-                    {phoneNumber} &bull; {selectedSeason?.crop_name} ({selectedSeason?.village_name})
+                    {phoneNumber} &bull; {selectedSeason?.crop_name || 'General Advisory'} ({selectedFarmer?.village_name || selectedSeason?.village_name || 'Panchayat'})
                   </p>
                 </div>
 
@@ -503,11 +626,17 @@ export const CallSimulatorPage: React.FC = () => {
                   ) : (
                     <button
                       onClick={() => startCallMutation.mutate()}
-                      disabled={!selectedSeasonId || startCallMutation.isPending}
+                      disabled={!selectedFarmerId || !isDemoFarmer || startCallMutation.isPending}
                       className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition active:scale-95 disabled:bg-stone-800 disabled:text-stone-500"
                     >
                       <Phone className="w-5 h-5 fill-current" />
-                      {startCallMutation.isPending ? 'Connecting...' : 'Start Telugu Voice Call'}
+                      {startCallMutation.isPending
+                        ? 'Connecting...'
+                        : !isDemoFarmer
+                        ? 'Demo Farmers Only (Gated)'
+                        : !selectedFarmerId
+                        ? 'Select a Farmer'
+                        : 'Start Telugu Voice Call (Simulation)'}
                     </button>
                   )}
                 </div>
@@ -517,36 +646,85 @@ export const CallSimulatorPage: React.FC = () => {
 
           {/* RIGHT: Controls & Live Inspection Panel (7 cols) */}
           <div className="lg:col-span-7 space-y-6">
-            {/* Season & Schedule Selector Card */}
-            <div className="bg-white rounded-2xl p-5 shadow-sm border border-stone-200">
-              <h3 className="text-base font-bold text-stone-800 mb-3 flex items-center gap-2">
-                <Sprout className="w-5 h-5 text-emerald-600" />
-                Select Farmer & Season for Call Evaluation
-              </h3>
+            {/* Farmer & Season Selector Card */}
+            <div className="bg-white rounded-2xl p-5 shadow-sm border border-stone-200 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-stone-800 flex items-center gap-2">
+                  <Sprout className="w-5 h-5 text-emerald-600" />
+                  Select Farmer & Season for Call Evaluation
+                </h3>
+                {selectedFarmerId && (
+                  <Link
+                    to={`/farmers/${selectedFarmerId}`}
+                    className="text-xs text-forest-700 hover:underline flex items-center gap-1 font-semibold"
+                  >
+                    <User className="w-3.5 h-3.5" /> View Farmer Profile <ArrowRight className="w-3 h-3" />
+                  </Link>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Farmer Dropdown */}
                 <div>
                   <label className="block text-xs font-medium text-stone-600 mb-1">
-                    Active Season
+                    Select Farmer ({farmers.length} Available)
                   </label>
                   <select
-                    value={selectedSeasonId}
-                    onChange={(e) => setSelectedSeasonId(e.target.value)}
+                    value={selectedFarmerId}
+                    onChange={(e) => {
+                      setSelectedFarmerId(e.target.value);
+                      setSearchParams({ farmerId: e.target.value });
+                    }}
                     disabled={callActive}
                     className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-800 focus:ring-2 focus:ring-emerald-500"
                   >
-                    {seasons.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.farmer_name} - {s.crop_name} ({s.season_code})
+                    {farmers.map((f: any) => (
+                      <option key={f.id} value={f.id}>
+                        {f.full_name} ({f.farmer_code}) - {f.village_name} {f.data_origin === 'demo' ? '[DEMO]' : '[FIELD]'}
                       </option>
                     ))}
                   </select>
                 </div>
 
+                {/* Linked Season Dropdown */}
                 <div>
                   <label className="block text-xs font-medium text-stone-600 mb-1">
-                    Farmer Phone (E.164)
+                    Linked Season ({seasons.length})
                   </label>
+                  <select
+                    value={selectedSeasonId}
+                    onChange={(e) => setSelectedSeasonId(e.target.value)}
+                    disabled={callActive || seasons.length === 0}
+                    className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-800 focus:ring-2 focus:ring-emerald-500 disabled:opacity-60"
+                  >
+                    {seasons.length === 0 ? (
+                      <option value="">No registered seasons (Generic Advisory)</option>
+                    ) : (
+                      seasons.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.crop_name} - {s.season_code} ({s.status})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                {/* Farmer Phone Field */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-stone-600">
+                      Farmer Phone (E.164)
+                    </label>
+                    {isPhoneVerified ? (
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5">
+                        <Check className="w-3 h-3 text-emerald-600" /> Verified
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5">
+                        <AlertTriangle className="w-3 h-3 text-amber-600" /> Unverified
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={phoneNumber}
@@ -555,7 +733,45 @@ export const CallSimulatorPage: React.FC = () => {
                     className="w-full px-3 py-2 bg-stone-50 border border-stone-300 rounded-lg text-sm text-stone-800 font-mono focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
+
+                {/* Farmer Meta Badge / Origin */}
+                <div>
+                  <label className="block text-xs font-medium text-stone-600 mb-1">
+                    Farmer Data Provenance & Scope
+                  </label>
+                  <div className="px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-xs flex items-center justify-between">
+                    <span className="font-medium text-stone-700 truncate mr-2">
+                      {selectedFarmer?.village_name || 'Village Scoped'}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 ${
+                      isDemoFarmer
+                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                        : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    }`}>
+                      {isDemoFarmer ? 'Demo Account' : 'Verified Field Record'}
+                    </span>
+                  </div>
+                </div>
               </div>
+
+              {/* Informative notices */}
+              {!isDemoFarmer && (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                  <div>
+                    <strong>Interactive Simulator Gating:</strong> This farmer is marked as verified field data (<code>real</code>). The simulated dialpad is safety-gated to demo accounts to protect production irrigation audits. Use <strong>Live Mode</strong> to dispatch real cellular calls, or pick a demo farmer to test dialpad interactions.
+                  </div>
+                </div>
+              )}
+
+              {seasons.length === 0 && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-2">
+                  <Info className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
+                  <div>
+                    <strong>No Registered Seasons:</strong> This farmer currently has no active or past agricultural seasons. Dialpad test calls will evaluate standard baseline questions. You can add a season in the <Link to={`/farmers/${selectedFarmerId}`} className="underline font-bold">Farmer Profile</Link>.
+                  </div>
+                </div>
+              )}
 
               {nextDueSchedule && (
                 <div className="mt-4 p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between text-xs text-emerald-900">
@@ -611,58 +827,268 @@ export const CallSimulatorPage: React.FC = () => {
                 )}
               </div>
             </div>
-
-            {/* Results & Downstream Records View */}
-            {callStatus === 'completed' && (
-              <div className="bg-emerald-50 border border-emerald-300 rounded-2xl p-5 space-y-3 animate-fadeIn">
-                <div className="flex items-center gap-2 text-emerald-900 font-bold">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                  Automatic Downstream Updates Recorded
-                </div>
-                <p className="text-xs text-emerald-800 leading-relaxed">
-                  The call engine processed farmer answers and updated the system without human intervention:
+          </div>
+        </div>
+      ) : activeTab === 'live' ? (
+        /* TAB 2: Live Mode (Twilio Voice & Fallback SMS) */
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-stone-200 space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-stone-200 pb-4">
+              <div>
+                <h2 className="text-lg font-bold text-stone-800 flex items-center gap-2">
+                  <Radio className="w-5 h-5 text-amber-600" />
+                  Real Outbound Voice Dispatcher (Twilio Live PSTN)
+                </h2>
+                <p className="text-stone-500 text-xs mt-1">
+                  Place an actual voice call to a farmer's cellular phone. If unanswered or failed, an automatic fallback Telugu SMS advisory is triggered immediately.
                 </p>
+              </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-                  <div className="bg-white p-3 rounded-xl border border-emerald-200 text-xs">
-                    <span className="font-bold text-stone-800 block mb-1">Farmer Feedback</span>
-                    <span className="text-emerald-700">Source: Simulator</span>
-                    <p className="text-stone-500 mt-1">Fortnightly feedback recorded with rainfall, crop condition, and problems.</p>
-                  </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-stone-500">Recipient Phone Status:</span>
+                {isPhoneVerified ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Verified
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Unverified
+                  </span>
+                )}
+              </div>
+            </div>
 
-                  <div className="bg-white p-3 rounded-xl border border-emerald-200 text-xs">
-                    <span className="font-bold text-stone-800 block mb-1">Irrigation Estimate</span>
-                    <span className="text-emerald-700">Type: Estimated</span>
-                    <p className="text-stone-500 mt-1">Calculated from pump hours &times; discharge rate with farmer reported provenance.</p>
-                  </div>
+            {/* Selection Card */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                  Select Farmer
+                </label>
+                <select
+                  value={selectedFarmerId}
+                  onChange={(e) => {
+                    setSelectedFarmerId(e.target.value);
+                    setSearchParams({ farmerId: e.target.value });
+                  }}
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-sm text-stone-800 focus:ring-2 focus:ring-amber-500"
+                >
+                  {farmers.map((f: any) => (
+                    <option key={f.id} value={f.id}>
+                      {f.full_name} ({f.farmer_code}) - {f.village_name} {f.data_origin === 'demo' ? '[DEMO]' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-                  <div className="bg-white p-3 rounded-xl border border-emerald-200 text-xs">
-                    <span className="font-bold text-stone-800 block mb-1">Action Queue</span>
-                    <span className="text-emerald-700">Deduplicated</span>
-                    <p className="text-stone-500 mt-1">Open items generated if farmer reported water shortage, pests, or requested a callback.</p>
-                  </div>
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                  Linked Season ({seasons.length})
+                </label>
+                <select
+                  value={selectedSeasonId}
+                  onChange={(e) => setSelectedSeasonId(e.target.value)}
+                  disabled={seasons.length === 0}
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-sm text-stone-800 focus:ring-2 focus:ring-amber-500 disabled:opacity-60"
+                >
+                  {seasons.length === 0 ? (
+                    <option value="">No registered seasons (Generic)</option>
+                  ) : (
+                    seasons.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.crop_name} - {s.season_code} ({s.status})
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
 
-                <div className="flex items-center gap-3 pt-2">
-                  <Link
-                    to={`/seasons/${selectedSeasonId}`}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold shadow-sm transition"
-                  >
-                    View Season Details <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
-                  <Link
-                    to="/action-items"
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 text-xs font-semibold shadow-sm transition"
-                  >
-                    Open Action Queue <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                  Target Cellular Phone Number (E.164)
+                </label>
+                <input
+                  type="text"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-sm font-mono text-stone-800 focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+
+            {!isPhoneVerified && (
+              <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-800 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <strong>Live Call Gating Active:</strong> This farmer's phone number is unverified.
+                  To prevent unauthorized automated calls, complete OTP phone verification in the <Link to={`/farmers/${selectedFarmerId}`} className="underline font-bold">Farmer Profile</Link> before placing live outbound calls.
                 </div>
               </div>
             )}
+
+            {/* Live Dispatch Button */}
+            <div className="flex items-center justify-between p-4 bg-stone-50 rounded-2xl border border-stone-200">
+              <div className="text-xs text-stone-600 space-y-0.5">
+                <p className="font-semibold text-stone-800">Ready to dispatch voice call?</p>
+                <p>Twilio carrier rates will apply. Fallback Telugu SMS advisory is enabled.</p>
+              </div>
+
+              <Button
+                variant="primary"
+                onClick={() => setIsLiveConfirmOpen(true)}
+                disabled={!isPhoneVerified || liveCallMutation.isPending}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold"
+              >
+                <PhoneCall className="w-4 h-4 mr-2" />
+                Place Live Outbound Call
+              </Button>
+            </div>
+
+            {/* Live Call Result Panel */}
+            {liveCallResult && (
+              <div className={`p-4 rounded-xl border text-xs space-y-2 ${
+                liveCallResult.success
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                  : 'bg-amber-50 border-amber-300 text-amber-900'
+              }`}>
+                <div className="flex items-center gap-2 font-bold text-sm">
+                  {liveCallResult.success ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Live Call Initiated!
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="w-4 h-4 text-amber-600" /> Outbound Call Status
+                    </>
+                  )}
+                </div>
+                <p>{liveCallResult.message || liveCallResult.error}</p>
+                {liveCallResult.callSid && (
+                  <p className="font-mono text-[11px] text-stone-500">Twilio Call SID: {liveCallResult.callSid}</p>
+                )}
+                {liveCallResult.fallbackSmsSent && (
+                  <div className="mt-2 pt-2 border-t border-amber-200">
+                    <p className="font-bold flex items-center gap-1.5 text-amber-950 mb-1">
+                      <MessageSquare className="w-3.5 h-3.5" /> Fallback Telugu SMS Advisory Dispatched:
+                    </p>
+                    <blockquote className="p-2 bg-white rounded border border-amber-200 italic font-serif text-[11px]">
+                      {liveCallResult.fallbackSmsContent}
+                    </blockquote>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Recent Call Logs & Audit Table */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-stone-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-stone-800 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-emerald-600" /> Recent Telephony Attempts & Communication Logs
+              </h3>
+              <button
+                onClick={() => refetchLogs()}
+                className="text-xs text-forest-700 hover:underline flex items-center gap-1 font-semibold"
+              >
+                <RotateCcw className="w-3 h-3" /> Refresh Logs
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-stone-50 border-b border-stone-200 text-stone-600 uppercase font-semibold">
+                  <tr>
+                    <th className="py-2.5 px-3">Time</th>
+                    <th className="py-2.5 px-3">Farmer & Season</th>
+                    <th className="py-2.5 px-3">Phone</th>
+                    <th className="py-2.5 px-3">Provider</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3">Duration</th>
+                    <th className="py-2.5 px-3">Fallback SMS / Notes</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-200">
+                  {callLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-6 text-center text-stone-400">
+                        No recent call logs found.
+                      </td>
+                    </tr>
+                  ) : (
+                    callLogs.map((log: any) => (
+                      <tr key={log.id} className="hover:bg-stone-50/80 transition">
+                        <td className="py-2.5 px-3 text-stone-500 whitespace-nowrap">
+                          {new Date(log.started_at).toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-stone-900">
+                          {log.farmer_id ? (
+                            <Link
+                              to={`/farmers/${log.farmer_id}`}
+                              className="text-forest-700 hover:underline font-semibold flex items-center gap-1"
+                            >
+                              <User className="w-3.5 h-3.5 inline text-forest-600 shrink-0" />
+                              <span>{log.farmer_name || log.farmer_code || 'Farmer Profile'}</span>
+                            </Link>
+                          ) : (
+                            <span>{log.farmer_name || log.farmer_code || 'Unknown Farmer'}</span>
+                          )}
+                          {log.season_code && (
+                            <span className="block text-[10px] text-stone-400 font-normal">
+                              {log.season_code} {log.crop_name ? `• ${log.crop_name}` : ''}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-stone-600">
+                          {log.contact_phone || log.phone_e164 || '-'}
+                        </td>
+                        <td className="py-2.5 px-3 uppercase text-stone-600 font-semibold text-[10px]">
+                          {log.provider}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                            log.status === 'completed'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : log.status === 'failed' || log.status === 'no_answer'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {log.status}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-stone-600">
+                          {log.duration_seconds ? `${log.duration_seconds}s` : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-stone-500 max-w-xs truncate" title={log.error_message}>
+                          {log.fallback_sms_sent ? (
+                            <span className="inline-flex items-center gap-1 text-amber-700 font-medium">
+                              <MessageSquare className="w-3 h-3 text-amber-600" /> SMS Dispatched
+                            </span>
+                          ) : log.error_message ? (
+                            <span className="text-rose-600">{log.error_message}</span>
+                          ) : (
+                            '-'
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedCallAttemptId(log.id)}
+                            className="text-[11px] py-1 px-2.5"
+                          >
+                            <Eye className="w-3 h-3 mr-1" /> Details
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       ) : (
-        /* TAB 2: Audio Prompts & Review Workflow Console */
+        /* TAB 3: Audio Prompts & Review Workflow Console */
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-stone-200 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-stone-200 pb-4">
             <div>
@@ -735,7 +1161,53 @@ export const CallSimulatorPage: React.FC = () => {
         </div>
       )}
 
-      {/* Review Modal */}
+      {/* Live Call Confirmation Warning Modal */}
+      <Modal
+        isOpen={isLiveConfirmOpen}
+        onClose={() => setIsLiveConfirmOpen(false)}
+        title="⚠️ Confirm Live Outbound Call"
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 space-y-2">
+            <p className="font-bold flex items-center gap-1.5 text-sm">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+              Live Cellular Call Warning
+            </p>
+            <p>
+              You are about to initiate an actual phone call to <strong>{selectedSeason?.farmer_name}</strong> at:
+            </p>
+            <p className="font-mono text-base font-bold text-amber-950 text-center py-1">
+              {phoneNumber}
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-stone-600 text-[11px] pt-1 border-t border-amber-200">
+              <li>This will ring the farmer's mobile device via Twilio PSTN.</li>
+              <li>Ensure the recipient expects this call to avoid disturbance.</li>
+              <li>If unanswered or failed, an automatic fallback Telugu SMS will be dispatched.</li>
+            </ul>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsLiveConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              className="bg-amber-600 hover:bg-amber-700"
+              onClick={() => liveCallMutation.mutate()}
+              isLoading={liveCallMutation.isPending}
+              disabled={liveCallMutation.isPending}
+            >
+              Confirm & Dispatch Call
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Prompt Review Modal */}
       {reviewModalPrompt && (
         <div className="fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
@@ -795,6 +1267,158 @@ export const CallSimulatorPage: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Call Details Modal */}
+      <Modal
+        isOpen={Boolean(selectedCallAttemptId)}
+        onClose={() => setSelectedCallAttemptId(null)}
+        title="📞 Telephony Call Details & IVR Responses"
+        maxWidth="2xl"
+      >
+        {isLoadingDetails ? (
+          <div className="py-8 text-center text-stone-500 text-xs">Loading call attempt records...</div>
+        ) : !callDetailsData?.data ? (
+          <div className="py-8 text-center text-stone-500 text-xs">Call attempt record not found.</div>
+        ) : (
+          <div className="space-y-4 text-xs">
+            {/* Overview Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-stone-50 p-3 rounded-xl border border-stone-200">
+              <div>
+                <span className="text-stone-400 uppercase text-[10px] font-semibold">Status</span>
+                <p className="font-bold text-stone-800 capitalize mt-0.5">{callDetailsData.data.status}</p>
+              </div>
+              <div>
+                <span className="text-stone-400 uppercase text-[10px] font-semibold">Provider</span>
+                <p className="font-bold text-stone-800 uppercase mt-0.5">{callDetailsData.data.provider}</p>
+              </div>
+              <div>
+                <span className="text-stone-400 uppercase text-[10px] font-semibold">Duration</span>
+                <p className="font-bold text-stone-800 mt-0.5">
+                  {callDetailsData.data.duration_seconds ? `${callDetailsData.data.duration_seconds}s` : '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-stone-400 uppercase text-[10px] font-semibold">Started</span>
+                <p className="font-medium text-stone-700 mt-0.5">
+                  {new Date(callDetailsData.data.started_at).toLocaleTimeString()}
+                </p>
+              </div>
+            </div>
+
+            {/* Recipient & Farmer Context */}
+            <div className="p-3 bg-white rounded-xl border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-stone-400 uppercase text-[10px] font-semibold">Recipient Farmer</span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="font-bold text-stone-900 text-sm">
+                    {callDetailsData.data.farmer_name || 'Unlinked / Ad-hoc Farmer'}
+                  </span>
+                  {callDetailsData.data.farmer_code && (
+                    <span className="font-mono text-stone-500 text-xs">
+                      ({callDetailsData.data.farmer_code})
+                    </span>
+                  )}
+                  {callDetailsData.data.village_name && (
+                    <span className="text-stone-500 text-xs">&bull; {callDetailsData.data.village_name}</span>
+                  )}
+                </div>
+                <div className="text-stone-500 text-[11px] mt-1 space-x-2">
+                  <span className="font-mono">Phone: {callDetailsData.data.phone_e164 || '-'}</span>
+                  {callDetailsData.data.season_code && (
+                    <span>
+                      &bull; Season: <strong>{callDetailsData.data.crop_name}</strong> ({callDetailsData.data.season_code})
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {callDetailsData.data.farmer_id && (
+                <Link
+                  to={`/farmers/${callDetailsData.data.farmer_id}`}
+                  className="px-3 py-1.5 bg-forest-50 hover:bg-forest-100 text-forest-700 rounded-lg font-semibold inline-flex items-center gap-1.5 shrink-0 transition"
+                  onClick={() => setSelectedCallAttemptId(null)}
+                >
+                  <User className="w-3.5 h-3.5" /> Farmer Profile <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+              )}
+            </div>
+
+            {/* Fallback SMS Section */}
+            {callDetailsData.data.fallback_sms_content && (
+              <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-amber-950 flex items-center gap-1.5 text-xs">
+                    <MessageSquare className="w-3.5 h-3.5 text-amber-700" />
+                    Automatic Fallback Telugu SMS Advisory
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 uppercase font-semibold">
+                    {callDetailsData.data.fallback_sms_status || 'Delivered'}
+                  </span>
+                </div>
+                <p className="text-stone-800 italic font-serif text-[11px] bg-white p-2.5 rounded-lg border border-amber-200">
+                  {callDetailsData.data.fallback_sms_content}
+                </p>
+              </div>
+            )}
+
+            {/* Error Message if any */}
+            {callDetailsData.data.error_message && (
+              <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <div>
+                  <strong>Call Failure Reason:</strong> {callDetailsData.data.error_message}
+                </div>
+              </div>
+            )}
+
+            {/* DTMF Survey Responses */}
+            <div>
+              <h4 className="font-bold text-stone-800 text-xs uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                Survey & Advisory DTMF Responses ({callDetailsData.data.responses?.length || 0})
+              </h4>
+              {!callDetailsData.data.responses || callDetailsData.data.responses.length === 0 ? (
+                <div className="p-4 bg-stone-50 rounded-xl text-center text-stone-400">
+                  No DTMF survey responses were recorded during this call attempt.
+                </div>
+              ) : (
+                <div className="border border-stone-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-stone-100 text-stone-600 font-semibold border-b border-stone-200">
+                      <tr>
+                        <th className="py-2 px-3">Step</th>
+                        <th className="py-2 px-3">Question</th>
+                        <th className="py-2 px-3">Key Pressed</th>
+                        <th className="py-2 px-3">Interpreted Answer</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-200">
+                      {callDetailsData.data.responses.map((resp: any) => (
+                        <tr key={resp.id} className="hover:bg-stone-50">
+                          <td className="py-2 px-3 font-semibold text-stone-700">Step {resp.step_number}</td>
+                          <td className="py-2 px-3 max-w-xs">
+                            <p className="font-medium text-stone-800">{resp.question_text_te}</p>
+                            <p className="text-stone-400 italic text-[10px]">{resp.question_text_en}</p>
+                          </td>
+                          <td className="py-2 px-3 font-mono font-bold text-amber-700">{resp.response_digits}</td>
+                          <td className="py-2 px-3 font-medium text-emerald-800">
+                            {resp.interpreted_value ? JSON.stringify(resp.interpreted_value) : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-stone-200">
+              <Button variant="outline" onClick={() => setSelectedCallAttemptId(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

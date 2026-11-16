@@ -32,24 +32,37 @@ describe('Phase 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence
 
     app = createApp();
 
-    // Authenticate Admin
-    const loginRes = await request(app)
+    // Authenticate Admin (handle both fresh seed and re-runs)
+    let loginRes = await request(app)
       .post('/api/v1/auth/login')
       .set('X-Requested-With', 'XMLHttpRequest')
-      .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+      .send({ email: 'admin@csp-irrigation.org', password: 'NewAdminPassword456!' });
+
+    if (loginRes.status !== 200) {
+      loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+    }
 
     const cookies = loginRes.headers['set-cookie'];
-    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : cookies;
+    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : (cookies || '');
 
-    // Change password to clear must_change_password
-    await request(app)
-      .post('/api/v1/auth/change-password')
-      .set('Cookie', adminCookie)
-      .set('X-Requested-With', 'XMLHttpRequest')
-      .send({
-        currentPassword: 'ChangeMeAdmin123!',
-        newPassword: 'NewAdminPassword456!',
-      });
+    // Clear must_change_password if newly initialized
+    if (loginRes.body?.data?.user?.mustChangePassword) {
+      const changeRes = await request(app)
+        .post('/api/v1/auth/change-password')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          currentPassword: 'ChangeMeAdmin123!',
+          newPassword: 'NewAdminPassword456!',
+        });
+      const newCookies = changeRes.headers['set-cookie'];
+      if (newCookies) {
+        adminCookie = Array.isArray(newCookies) ? newCookies.join('; ') : newCookies;
+      }
+    }
 
     // Retrieve village
     const villageRes = await db.query(`SELECT id FROM villages LIMIT 1`);
@@ -426,7 +439,8 @@ describe('Phase 5: Water Analytics, FAO-56 Engine, Paddy Model & Data Confidence
       // 1. Create a second village
       const v2Res = await db.query(
         `INSERT INTO villages (name, mandal, district, gram_panchayat, latitude, longitude)
-         VALUES ('East Delta Village', 'Amalapuram', 'Konaseema', 'East GP', 16.57, 82.00)
+         VALUES ('East Delta Scoping Village', 'Amalapuram', 'Konaseema', 'East GP', 16.57, 82.00)
+         ON CONFLICT (name, mandal) DO UPDATE SET name = EXCLUDED.name
          RETURNING id`
       );
       const village2Id = v2Res.rows[0].id;

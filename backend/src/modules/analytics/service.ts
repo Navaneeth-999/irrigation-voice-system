@@ -238,8 +238,13 @@ export class AnalyticsService {
    */
   async recalculateSeasonWaterMetrics(seasonId: string): Promise<SeasonWaterMetrics> {
     const seasonRes = await db.query(
-      `SELECT area_acres_snapshot, irrigation_method_type_id
-       FROM seasons WHERE id = $1`,
+      `SELECT s.area_acres_snapshot, s.irrigation_method_type_id,
+              s.actual_yield_quantity, s.actual_yield_unit, s.yield_value, s.yield_unit,
+              s.crop_sale_price_per_unit, s.cultivation_expense_inr,
+              imt.typical_efficiency, imt.efficiency_verified
+       FROM seasons s
+       LEFT JOIN irrigation_method_types imt ON imt.id = s.irrigation_method_type_id
+       WHERE s.id = $1`,
       [seasonId]
     );
 
@@ -247,7 +252,13 @@ export class AnalyticsService {
       throw new Error(`Season ${seasonId} not found`);
     }
 
-    const areaAcres = Number(seasonRes.rows[0].area_acres_snapshot || 1.0);
+    const seasonRow = seasonRes.rows[0];
+    const areaAcres = Number(seasonRow.area_acres_snapshot || 1.0);
+    const irrigationEfficiency = Number(
+      seasonRow.typical_efficiency && Number(seasonRow.typical_efficiency) > 0
+        ? seasonRow.typical_efficiency
+        : 0.75
+    );
 
     // 1. Aggregate from daily water balance
     const aggRes = await db.query(
@@ -273,8 +284,67 @@ export class AnalyticsService {
     const totalEffectiveRainM3 = waterUseRatioEngine.mmToCubicMeters(totalEffectiveRainMm, areaAcres);
     const netIrrigationDemandMm = Math.max(0, Math.round((totalEtcMm - totalEffectiveRainMm) * 100) / 100);
     const netIrrigationDemandM3 = waterUseRatioEngine.mmToCubicMeters(netIrrigationDemandMm, areaAcres);
-    const grossIrrigationDemandM3 = Math.round((netIrrigationDemandM3 / 0.75) * 100) / 100;
+
+    // Gross recommended irrigation demand based on irrigation efficiency configuration
+    const grossIrrigationDemandM3 = Math.round((netIrrigationDemandM3 / irrigationEfficiency) * 100) / 100;
+    const grossRecommendedM3 = grossIrrigationDemandM3;
+    const grossRecommendedLitres = Math.round(grossRecommendedM3 * 1000);
+
+    // Estimated actual applied water from recorded irrigation data
     const totalAppliedM3 = waterUseRatioEngine.litresToCubicMeters(totalAppliedLitres);
+
+    // Water saved in cubic meters and liters: Gross Recommended - Actual Applied
+    // Do NOT clamp negative savings to zero!
+    const waterSavedM3 = Math.round((grossRecommendedM3 - totalAppliedM3) * 100) / 100;
+    const waterSavedLitres = Math.round((grossRecommendedLitres - totalAppliedLitres) * 100) / 100;
+
+    // Water savings percentage: calculated ONLY when gross recommended water > 0.
+    // If recommended water is zero or missing, return null instead of dividing by zero.
+    // Allows negative values when actual usage exceeds recommendation.
+    let waterSavedPercentage: number | null = null;
+    if (grossRecommendedM3 > 0) {
+      waterSavedPercentage = Math.round(((grossRecommendedM3 - totalAppliedM3) / grossRecommendedM3) * 10000) / 100;
+    }
+
+    // Water productivity in kg/m³: ONLY when valid crop yield and applied water exist.
+    const rawYield = seasonRow.actual_yield_quantity !== null && seasonRow.actual_yield_quantity !== undefined
+      ? Number(seasonRow.actual_yield_quantity)
+      : (seasonRow.yield_value !== null && seasonRow.yield_value !== undefined ? Number(seasonRow.yield_value) : null);
+
+    const yieldUnit = String(seasonRow.actual_yield_unit || seasonRow.yield_unit || 'kg').toLowerCase();
+
+    let waterProductivityKgPerM3: number | null = null;
+    let yieldInKg: number | null = null;
+
+    if (rawYield !== null && !isNaN(rawYield) && rawYield > 0) {
+      if (yieldUnit === 'quintal') {
+        yieldInKg = rawYield * 100;
+      } else if (yieldUnit === 'tonne' || yieldUnit === 'ton') {
+        yieldInKg = rawYield * 1000;
+      } else {
+        yieldInKg = rawYield; // assumes kg
+      }
+
+      if (totalAppliedM3 > 0) {
+        waterProductivityKgPerM3 = Math.round((yieldInKg / totalAppliedM3) * 1000) / 1000;
+      }
+    }
+
+    // Net profit (INR): ONLY when crop yield, sale price, and cultivation expenses are available.
+    let netProfitInr: number | null = null;
+    const salePrice = seasonRow.crop_sale_price_per_unit !== null && seasonRow.crop_sale_price_per_unit !== undefined
+      ? Number(seasonRow.crop_sale_price_per_unit)
+      : null;
+    const expense = seasonRow.cultivation_expense_inr !== null && seasonRow.cultivation_expense_inr !== undefined
+      ? Number(seasonRow.cultivation_expense_inr)
+      : null;
+
+    if (rawYield !== null && !isNaN(rawYield) && rawYield > 0 &&
+        salePrice !== null && !isNaN(salePrice) && salePrice >= 0 &&
+        expense !== null && !isNaN(expense) && expense >= 0) {
+      const revenue = rawYield * salePrice;
+      netProfitInr = Math.round((revenue - expense) * 100) / 100;
+    }
 
     // 2. Evaluate WUR Non-Competitive Band
     const wurConfig = await waterUseRatioEngine.getThresholdsConfig();
@@ -315,9 +385,16 @@ export class AnalyticsService {
       netIrrigationDemandMm,
       netIrrigationDemandM3,
       grossIrrigationDemandM3,
+      grossRecommendedM3,
+      grossRecommendedLitres,
       totalAppliedLitres,
       totalAppliedM3,
       totalAppliedMm,
+      waterSavedM3,
+      waterSavedLitres,
+      waterSavedPercentage,
+      waterProductivityKgPerM3,
+      netProfitInr,
       waterUseRatio: wurEval.ratio,
       ratioBand: wurEval.band,
       confidenceScore: confidence.totalScore,
@@ -334,12 +411,15 @@ export class AnalyticsService {
       `INSERT INTO season_water_metrics (
         season_id, total_etc_mm, total_etc_m3, total_effective_rain_mm, total_effective_rain_m3,
         net_irrigation_demand_mm, net_irrigation_demand_m3, gross_irrigation_demand_m3,
+        gross_recommended_m3, gross_recommended_litres,
         total_applied_litres, total_applied_m3, total_applied_mm,
+        water_saved_m3, water_saved_litres, water_saved_percentage,
+        water_productivity_kg_per_m3, net_profit_inr,
         water_use_ratio, ratio_band, confidence_score, confidence_band,
         confidence_breakdown, has_unvalidated_assumptions, unvalidated_assumptions_list,
         anomaly_flags, calculated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, CURRENT_TIMESTAMP)
       ON CONFLICT (season_id) DO UPDATE SET
         total_etc_mm = EXCLUDED.total_etc_mm,
         total_etc_m3 = EXCLUDED.total_etc_m3,
@@ -348,9 +428,16 @@ export class AnalyticsService {
         net_irrigation_demand_mm = EXCLUDED.net_irrigation_demand_mm,
         net_irrigation_demand_m3 = EXCLUDED.net_irrigation_demand_m3,
         gross_irrigation_demand_m3 = EXCLUDED.gross_irrigation_demand_m3,
+        gross_recommended_m3 = EXCLUDED.gross_recommended_m3,
+        gross_recommended_litres = EXCLUDED.gross_recommended_litres,
         total_applied_litres = EXCLUDED.total_applied_litres,
         total_applied_m3 = EXCLUDED.total_applied_m3,
         total_applied_mm = EXCLUDED.total_applied_mm,
+        water_saved_m3 = EXCLUDED.water_saved_m3,
+        water_saved_litres = EXCLUDED.water_saved_litres,
+        water_saved_percentage = EXCLUDED.water_saved_percentage,
+        water_productivity_kg_per_m3 = EXCLUDED.water_productivity_kg_per_m3,
+        net_profit_inr = EXCLUDED.net_profit_inr,
         water_use_ratio = EXCLUDED.water_use_ratio,
         ratio_band = EXCLUDED.ratio_band,
         confidence_score = EXCLUDED.confidence_score,
@@ -369,9 +456,16 @@ export class AnalyticsService {
         netIrrigationDemandMm,
         netIrrigationDemandM3,
         grossIrrigationDemandM3,
+        grossRecommendedM3,
+        grossRecommendedLitres,
         totalAppliedLitres,
         totalAppliedM3,
         totalAppliedMm,
+        waterSavedM3,
+        waterSavedLitres,
+        waterSavedPercentage,
+        waterProductivityKgPerM3,
+        netProfitInr,
         wurEval.ratio,
         wurEval.band,
         confidence.totalScore,
@@ -428,7 +522,25 @@ export class AnalyticsService {
       [seasonId]
     );
 
+    // Fetch season details for metadata and data origin (real vs demo)
+    const seasonRes = await db.query(
+      `SELECT s.id, s.season_code, s.season_type, s.season_year, s.data_origin,
+              s.sowing_date, s.expected_harvest_date, s.actual_harvest_date,
+              s.area_acres_snapshot, s.actual_yield_quantity, s.actual_yield_unit,
+              s.crop_sale_price_per_unit, s.cultivation_expense_inr,
+              c.name as crop_name, c.name_te as crop_name_te, c.water_model,
+              f.full_name as farmer_name, f.data_origin as farmer_origin,
+              v.name as village_name
+       FROM seasons s
+       JOIN crops c ON c.id = s.crop_id
+       JOIN farmers f ON f.id = s.farmer_id
+       JOIN villages v ON v.id = f.village_id
+       WHERE s.id = $1`,
+      [seasonId]
+    );
+
     return {
+      season: seasonRes.rows[0] || null,
       metrics: {
         ...metrics,
         confidence_breakdown: typeof metrics.confidence_breakdown === 'string'

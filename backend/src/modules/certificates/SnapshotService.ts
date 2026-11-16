@@ -15,7 +15,7 @@ export class SnapshotService {
     // 1. Fetch Season, Farmer, Village, Plot, and Crop details
     const seasonRes = await db.query(
       `SELECT s.id as season_id, s.season_code, s.season_type, s.season_year,
-              s.sowing_date, s.area_acres_snapshot,
+              s.sowing_date, s.area_acres_snapshot, s.data_origin,
               f.id as farmer_id, f.farmer_code, f.full_name as farmer_name, f.preferred_language,
               v.name as village_name, v.mandal, v.district,
               p.id as plot_id, p.label as plot_label, p.area_acres as plot_area,
@@ -70,13 +70,15 @@ export class SnapshotService {
     );
     const fbSummary = fbRes.rows[0];
 
+    const sowingDateStr = row.sowing_date instanceof Date ? row.sowing_date.toISOString().split('T')[0] : String(row.sowing_date).split('T')[0];
+
     const snapshot: ImmutableSeasonSnapshot = {
       schemaVersion: '1.0.0',
       seasonId: row.season_id,
       seasonCode: row.season_code,
       seasonType: row.season_type,
       seasonYear: row.season_year,
-      sowingDate: row.sowing_date instanceof Date ? row.sowing_date.toISOString().split('T')[0] : String(row.sowing_date).split('T')[0],
+      sowingDate: sowingDateStr,
       actualHarvestDate: actualHarvestDate,
       yieldQuantity: yieldQuantity !== undefined ? Number(yieldQuantity) : null,
       yieldUnit: yieldUnit || null,
@@ -112,10 +114,17 @@ export class SnapshotService {
         totalEffectiveRainM3: Number(m.total_effective_rain_m3),
         netIrrigationDemandMm: Number(m.net_irrigation_demand_mm),
         netIrrigationDemandM3: Number(m.net_irrigation_demand_m3),
+        grossRecommendedM3: m.gross_recommended_m3 !== null && m.gross_recommended_m3 !== undefined ? Number(m.gross_recommended_m3) : null,
+        grossRecommendedLitres: m.gross_recommended_litres !== null && m.gross_recommended_litres !== undefined ? Number(m.gross_recommended_litres) : null,
         totalAppliedLitres: Number(m.total_applied_litres),
         totalAppliedM3: Number(m.total_applied_m3),
         totalAppliedMm: Number(m.total_applied_mm),
-        waterUseRatio: Number(m.water_use_ratio),
+        waterSavedM3: m.water_saved_m3 !== null && m.water_saved_m3 !== undefined ? Number(m.water_saved_m3) : null,
+        waterSavedLitres: m.water_saved_litres !== null && m.water_saved_litres !== undefined ? Number(m.water_saved_litres) : null,
+        waterSavedPercentage: m.water_saved_percentage !== null && m.water_saved_percentage !== undefined ? Number(m.water_saved_percentage) : null,
+        waterProductivityKgPerM3: m.water_productivity_kg_per_m3 !== null && m.water_productivity_kg_per_m3 !== undefined ? Number(m.water_productivity_kg_per_m3) : null,
+        netProfitInr: m.net_profit_inr !== null && m.net_profit_inr !== undefined ? Number(m.net_profit_inr) : null,
+        waterUseRatio: m.water_use_ratio !== null && m.water_use_ratio !== undefined ? Number(m.water_use_ratio) : null,
         ratioBand: m.ratio_band,
         confidenceScore: Number(m.confidence_score),
         confidenceBand: m.confidence_band,
@@ -127,16 +136,20 @@ export class SnapshotService {
           ? m.unvalidated_assumptions_list
           : [],
         anomalyFlags: Array.isArray(m.anomaly_flags) ? m.anomaly_flags : [],
+        calculationMethodology: 'FAO-56 Dual Kc Daily Soil Water Balance',
       },
       irrigationRecordsSummary: {
         totalLogsCount: irrSummary.count || 0,
         totalHoursReported: irrSummary.total_hours || 0,
         totalEstimatedVolumeL: irrSummary.total_volume || 0,
+        measurementType: irrSummary.count > 0 ? 'farmer-reported' : 'none',
       },
       feedbackSummary: {
         totalCyclesRecorded: fbSummary.count || 0,
         rainClassesReported: (fbSummary.rain_classes || []).filter(Boolean),
       },
+      dataOrigin: row.data_origin || 'real',
+      reportingPeriod: `${sowingDateStr} to ${actualHarvestDate}`,
       snapshotGeneratedAt: new Date().toISOString(),
     };
 

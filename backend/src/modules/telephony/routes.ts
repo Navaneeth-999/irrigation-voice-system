@@ -10,6 +10,11 @@ telephonyRouter.post('/simulator/start', requireAuth, TelephonyController.startS
 telephonyRouter.post('/simulator/dtmf', requireAuth, TelephonyController.simulatorDtmf);
 telephonyRouter.post('/simulator/timeout', requireAuth, TelephonyController.simulatorTimeout);
 
+telephonyRouter.post('/call/live', requireAuth, requireRole('ADMIN', 'CSP_MEMBER'), TelephonyController.startLiveCall);
+telephonyRouter.get('/logs', requireAuth, TelephonyController.listCallLogs);
+telephonyRouter.get('/farmers/:farmerId/history', requireAuth, TelephonyController.getFarmerCommunications);
+telephonyRouter.get('/attempts/:id', requireAuth, TelephonyController.getCallAttemptDetails);
+
 telephonyRouter.get('/schedules', requireAuth, TelephonyController.listSchedules);
 telephonyRouter.post('/schedule/process-due', requireAuth, requireRole('ADMIN', 'CSP_MEMBER'), TelephonyController.processDueQueue);
 

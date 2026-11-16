@@ -57,3 +57,30 @@ export async function getIrrigationMethodTypes(_req: Request, res: Response): Pr
   `);
   res.json({ data: imRes.rows });
 }
+
+export async function createVillage(req: Request, res: Response): Promise<void> {
+  const { name, mandal, district, gram_panchayat, latitude, longitude } = req.body;
+  if (!name || !mandal || !district) {
+    res.status(400).json({ success: false, error: 'name, mandal, and district are required' });
+    return;
+  }
+
+  const result = await db.query(`
+    INSERT INTO villages (name, mandal, district, gram_panchayat, latitude, longitude, is_demo)
+    VALUES ($1, $2, $3, $4, $5, $6, false)
+    ON CONFLICT (name, mandal) DO UPDATE SET
+      district = EXCLUDED.district,
+      gram_panchayat = COALESCE(EXCLUDED.gram_panchayat, villages.gram_panchayat),
+      updated_at = CURRENT_TIMESTAMP
+    RETURNING id, name, mandal, district, gram_panchayat, latitude, longitude, is_demo
+  `, [
+    name.trim(),
+    mandal.trim(),
+    district.trim(),
+    gram_panchayat ? gram_panchayat.trim() : `${name.trim()} GP`,
+    latitude ? Number(latitude) : 16.3000,
+    longitude ? Number(longitude) : 80.4500,
+  ]);
+
+  res.status(201).json({ success: true, data: result.rows[0] });
+}

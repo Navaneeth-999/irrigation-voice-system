@@ -22,7 +22,9 @@ export async function getDashboardKPIs(req: Request, res: Response): Promise<voi
           callsCompleted: 0,
           callsPending: 0,
           openActionItems: 0,
-          estimatedWaterUsageL: 0,
+          estimatedWaterUsageL: null,
+          hasIrrigationRecords: false,
+          waterRecordsCount: 0,
         }
       });
       return;
@@ -81,9 +83,11 @@ export async function getDashboardKPIs(req: Request, res: Response): Promise<voi
   }
   const actionRes = await db.query(actionQuery, params);
 
-  // 5. Water usage sum
+  // 5. Water usage sum & record count (distinguish genuine 0 usage from missing records)
   let waterQuery = `
-    SELECT COALESCE(SUM(ir.estimated_volume_l), 0)::float as total_litres
+    SELECT 
+      SUM(ir.estimated_volume_l)::float as total_litres,
+      COUNT(ir.id)::int as record_count
     FROM irrigation_records ir
     JOIN seasons s ON ir.season_id = s.id
     JOIN plots p ON s.plot_id = p.id
@@ -94,6 +98,32 @@ export async function getDashboardKPIs(req: Request, res: Response): Promise<voi
     waterQuery += ` AND f.village_id = ANY($1)`;
   }
   const waterRes = await db.query(waterQuery, params);
+  const recordCount = waterRes.rows[0]?.record_count || 0;
+  const estimatedWaterUsageL = recordCount > 0 ? (waterRes.rows[0]?.total_litres ?? 0) : null;
+
+  // 6. Real Call counts from call_attempts and call_schedule
+  let callCompletedQuery = `
+    SELECT COUNT(DISTINCT ca.id)::int as completed_count
+    FROM call_attempts ca
+    LEFT JOIN call_schedule cs ON ca.call_schedule_id = cs.id
+    LEFT JOIN farmers f ON cs.farmer_id = f.id
+    WHERE ca.status = 'completed'
+  `;
+  if (scopedVillages !== null) {
+    callCompletedQuery += ` AND (f.village_id = ANY($1) OR cs.id IS NULL)`;
+  }
+  const callCompletedRes = await db.query(callCompletedQuery, params);
+
+  let callPendingQuery = `
+    SELECT COUNT(DISTINCT cs.id)::int as pending_count
+    FROM call_schedule cs
+    JOIN farmers f ON cs.farmer_id = f.id
+    WHERE cs.status IN ('scheduled', 'in_progress')
+  `;
+  if (scopedVillages !== null) {
+    callPendingQuery += ` AND f.village_id = ANY($1)`;
+  }
+  const callPendingRes = await db.query(callPendingQuery, params);
 
   const kpis = {
     totalFarmers: farmersCountRes.rows[0]?.total || 0,
@@ -101,10 +131,12 @@ export async function getDashboardKPIs(req: Request, res: Response): Promise<voi
     totalAcres: acresRes.rows[0]?.total_acres || 0,
     activeSeasons: seasonCountRes.rows[0]?.active_seasons || 0,
     completedSeasons: seasonCountRes.rows[0]?.completed_seasons || 0,
-    callsCompleted: 0,
-    callsPending: 0,
+    callsCompleted: callCompletedRes.rows[0]?.completed_count || 0,
+    callsPending: callPendingRes.rows[0]?.pending_count || 0,
     openActionItems: actionRes.rows[0]?.open_actions || 0,
-    estimatedWaterUsageL: waterRes.rows[0]?.total_litres || 0,
+    estimatedWaterUsageL,
+    hasIrrigationRecords: recordCount > 0,
+    waterRecordsCount: recordCount,
   };
 
   res.json({ data: kpis });

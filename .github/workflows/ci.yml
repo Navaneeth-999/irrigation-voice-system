@@ -45,9 +45,22 @@ jobs:
           cd backend
           npm run typecheck
 
+      - name: Run backend migrations and reference seed
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_irrigation_db
+          DIRECT_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_irrigation_db
+          TEST_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_irrigation_db
+          JWT_SECRET: test_jwt_secret_must_be_at_least_32_characters_long_for_security
+        run: |
+          cd backend
+          npm run migrate
+          npm run seed:reference
+
       - name: Run backend tests
         env:
           DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_irrigation_db
+          DIRECT_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_irrigation_db
+          TEST_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_irrigation_db
           JWT_SECRET: test_jwt_secret_must_be_at_least_32_characters_long_for_security
         run: |
           cd backend

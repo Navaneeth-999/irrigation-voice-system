@@ -30,7 +30,7 @@ export class OpenMeteoAdapter implements IWeatherAdapter {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
-          'User-Agent': 'CSPIrrigationSystem/1.0 (BTech Community Service Project)',
+          'User-Agent': 'SmartIrrigationAdvisorySystem/1.0 (Irrigation Management Initiative)',
         },
       });
 
@@ -73,7 +73,7 @@ export class OpenMeteoAdapter implements IWeatherAdapter {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
-          'User-Agent': 'CSPIrrigationSystem/1.0 (BTech Community Service Project)',
+          'User-Agent': 'SmartIrrigationAdvisorySystem/1.0 (Irrigation Management Initiative)',
         },
       });
 

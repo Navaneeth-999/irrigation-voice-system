@@ -43,10 +43,17 @@ export interface SeasonWaterMetrics {
   netIrrigationDemandMm: number;
   netIrrigationDemandM3: number;
   grossIrrigationDemandM3: number;
+  grossRecommendedM3: number;
+  grossRecommendedLitres: number;
   totalAppliedLitres: number;
   totalAppliedM3: number;
   totalAppliedMm: number;
-  waterUseRatio: number;
+  waterSavedM3: number;
+  waterSavedLitres: number;
+  waterSavedPercentage: number | null;
+  waterProductivityKgPerM3: number | null;
+  netProfitInr: number | null;
+  waterUseRatio: number | null;
   ratioBand: WaterUseRatioBand;
   confidenceScore: number;
   confidenceBand: ConfidenceBand;

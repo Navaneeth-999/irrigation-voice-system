@@ -29,10 +29,13 @@ export async function apiRequest<T = any>(
   const url = `${BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     'X-Requested-With': 'XMLHttpRequest', // CSRF protection header
     ...(options.headers as Record<string, string> || {}),
   };
+
+  if (!(options.body instanceof FormData) && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const response = await fetch(url, {
     ...options,
@@ -44,10 +47,18 @@ export async function apiRequest<T = any>(
   const data = isJson ? await response.json() : null;
 
   if (!response.ok) {
-    const errorData = data as ApiErrorResponse | null;
-    const message = errorData?.error?.message || `Request failed with status ${response.status}`;
-    const code = errorData?.error?.code || 'REQUEST_FAILED';
-    const details = errorData?.error?.details;
+    const errorData = data as any;
+    const message =
+      errorData?.error?.message ||
+      errorData?.message ||
+      (typeof errorData?.error === 'string' ? errorData.error : null) ||
+      `Request failed with status ${response.status}`;
+    const code =
+      errorData?.error?.code ||
+      (typeof errorData?.error === 'string' ? errorData.error : null) ||
+      errorData?.code ||
+      'REQUEST_FAILED';
+    const details = errorData?.details || errorData?.error?.details || errorData;
     throw new ApiError(message, code, response.status, details);
   }
 

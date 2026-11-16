@@ -9,7 +9,7 @@ export interface WurThresholdsConfig {
 }
 
 export interface WurEvaluation {
-  ratio: number;
+  ratio: number | null;
   band: WaterUseRatioBand;
   labelEn: string;
   labelTe: string;
@@ -17,6 +17,7 @@ export interface WurEvaluation {
   descriptionTe: string;
   thresholdsConfig: WurThresholdsConfig;
   unvalidatedAssumption?: string;
+  isZeroDemand?: boolean;
 }
 
 /**
@@ -90,6 +91,8 @@ export class WaterUseRatioEngine {
 
   /**
    * Evaluates Water Use Ratio into non-competitive qualitative bands.
+   * If net agronomic crop demand is zero or negligible (< 0.5 m³ / rainfed), returns ratio = null
+   * with clear explanatory labels instead of dividing by zero or arbitrarily clamping to 0.1 (which manufactures false ratios like 720).
    */
   evaluateRatio(
     appliedM3: number,
@@ -103,8 +106,42 @@ export class WaterUseRatioEngine {
       source: 'ASSUMPTIONS.md / Default Baseline',
     };
 
-    const validDemand = Math.max(0.1, demandM3);
-    const rawRatio = appliedM3 / validDemand;
+    let unvalidatedAssumption: string | undefined;
+    if (!config.isVerified) {
+      unvalidatedAssumption = `Water Use Ratio qualitative bands (${config.lowerBandEdge} / ${config.upperBandEdge}) based on uncalibrated heuristic (${config.source})`;
+    }
+
+    // Zero or negligible agronomic demand (< 0.5 m³ over plot)
+    if (demandM3 === null || demandM3 === undefined || isNaN(demandM3) || demandM3 < 0.5) {
+      if (appliedM3 > 0) {
+        return {
+          ratio: null,
+          band: 'above_estimate',
+          labelEn: 'Supplemental Irrigation (Zero Demand)',
+          labelTe: 'అదనపు నీరు (డిమాండ్ సున్నా)',
+          descriptionEn: `Rainfall fully met estimated agronomic crop water demand. Reported irrigation of ${Math.round(appliedM3 * 10) / 10} m3 was supplemental or excess.`,
+          descriptionTe: `వర్షపాతం పంట నీటి అవసరాలను పూర్తిగా తీర్చింది. అందించిన ${Math.round(appliedM3 * 10) / 10} m3 నీరు అదనపు సాగునీరు.`,
+          thresholdsConfig: config,
+          unvalidatedAssumption,
+          isZeroDemand: true,
+        };
+      } else {
+        return {
+          ratio: null,
+          band: 'near_estimate',
+          labelEn: 'Rainfed / Zero Irrigation Demand',
+          labelTe: 'వర్షాధార సాగు (డిమాండ్ సున్నా)',
+          descriptionEn: 'Rainfall fully satisfied crop evapotranspiration demand. No net irrigation was required or applied.',
+          descriptionTe: 'వర్షపాతం పంట నీటి అవసరాలను పూర్తిగా తీర్చింది. అదనపు నీటిపారుదల అవసరం లేదు.',
+          thresholdsConfig: config,
+          unvalidatedAssumption,
+          isZeroDemand: true,
+        };
+      }
+    }
+
+    // Genuine non-clamped ratio against valid agronomic demand
+    const rawRatio = appliedM3 / demandM3;
     const ratio = Math.round(rawRatio * 100) / 100;
 
     let band: WaterUseRatioBand;
@@ -133,11 +170,6 @@ export class WaterUseRatioEngine {
       descriptionTe = 'పంట అంచనా అవసరం కంటే ఎక్కువ నీరు వాడారు. మురుగు నీటి నష్టాలు లేదా ఎక్కువ పారుదల జరిగి ఉండవచ్చు.';
     }
 
-    let unvalidatedAssumption: string | undefined;
-    if (!config.isVerified) {
-      unvalidatedAssumption = `Water Use Ratio qualitative bands (${config.lowerBandEdge} / ${config.upperBandEdge}) based on uncalibrated heuristic (${config.source})`;
-    }
-
     return {
       ratio,
       band,
@@ -147,6 +179,7 @@ export class WaterUseRatioEngine {
       descriptionTe,
       thresholdsConfig: config,
       unvalidatedAssumption,
+      isZeroDemand: false,
     };
   }
 

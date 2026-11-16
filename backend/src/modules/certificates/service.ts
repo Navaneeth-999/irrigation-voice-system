@@ -129,6 +129,17 @@ export class CertificateService {
       );
     }
 
+    const irrCountRes = await db.query(
+      `SELECT COUNT(*)::int as count FROM irrigation_records WHERE season_id = $1`,
+      [seasonId]
+    );
+    const irrCount = irrCountRes.rows[0]?.count || 0;
+    if (irrCount === 0) {
+      reasons.push(
+        'No irrigation logs recorded for this season. Minimum recorded irrigation data is required for certificate eligibility.'
+      );
+    }
+
     return {
       isEligible: reasons.length === 0,
       monitoringCycleCoverage,
@@ -289,7 +300,7 @@ export class CertificateService {
           monitoringCycleCoverage: Number(r.monitoring_cycle_coverage),
           confidenceScore: Number(r.confidence_score),
           confidenceBand: r.confidence_band,
-          waterUseRatio: Number(r.water_use_ratio),
+          waterUseRatio: r.water_use_ratio !== null && r.water_use_ratio !== undefined ? Number(r.water_use_ratio) : null,
           waterUseRatioBand: r.water_use_ratio_band,
           isCertificateEligible: false,
           ineligibilityReasons: typeof r.ineligibility_reasons === 'string' ? JSON.parse(r.ineligibility_reasons) : r.ineligibility_reasons,
@@ -348,7 +359,7 @@ export class CertificateService {
           metrics.ratioBand,
           metrics.confidenceScore,
           metrics.confidenceBand,
-          0,
+          Number(metrics.waterSavedLitres ?? 0),
           actualHarvestDate,
           yieldQuantity || null,
           yieldUnit || null,
@@ -378,6 +389,14 @@ export class CertificateService {
           completionNotes || null,
           season.id,
         ]
+      );
+
+      // Record initial status in certificate_status_history
+      await tx.query(
+        `INSERT INTO certificate_status_history (
+          certificate_id, previous_status, new_status, reason, changed_by
+        ) VALUES ($1, 'draft', 'active', 'Initial certificate issuance', $2)`,
+        [certRes.rows[0].id, userId || null]
       );
 
       certificateRecord = this.mapCertificateRow(certRes.rows[0]);
@@ -449,16 +468,36 @@ export class CertificateService {
     let newCertRecord: CertificateRecord | null = null;
 
     await withTransaction(async (tx) => {
-      // 1. Insert new certificate version
+      // 1. Revoke old certificate first to ensure only one active cert per season
+      await tx.query(
+        `UPDATE certificates
+         SET status = 'revoked',
+             is_revoked = true,
+             revocation_reason = $1,
+             revoked_at = CURRENT_TIMESTAMP,
+             revoked_by = $2
+         WHERE id = $3`,
+        [`Replaced by reissued certificate ${newCertificateCode}: ${reason}`, userId || null, oldCert.id]
+      );
+
+      // Record old certificate revocation in certificate_status_history
+      await tx.query(
+        `INSERT INTO certificate_status_history (
+          certificate_id, previous_status, new_status, reason, changed_by
+        ) VALUES ($1, $2, 'revoked', $3, $4)`,
+        [oldCert.id, oldCert.status || 'active', `Replaced by reissued certificate ${newCertificateCode}: ${reason}`, userId || null]
+      );
+
+      // 2. Insert new certificate version
       const newCertRes = await tx.query(
         `INSERT INTO certificates (
           certificate_code, season_id, farmer_id, plot_id, crop_id,
           water_use_ratio, water_use_ratio_band, confidence_score, confidence_band,
           estimated_water_saved_litres, actual_harvest_date, yield_quantity, yield_unit,
           snapshot_data, sha256_hash, verification_token,
-          replaces_certificate_id, version, created_by
+          replaces_certificate_id, version, status, created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'active', $19)
         RETURNING *`,
         [
           newCertificateCode,
@@ -470,7 +509,7 @@ export class CertificateService {
           metrics.ratioBand,
           metrics.confidenceScore,
           metrics.confidenceBand,
-          0,
+          Number(metrics.waterSavedLitres ?? 0),
           harvestDate,
           finalYieldQty || null,
           finalYieldUnit || null,
@@ -485,19 +524,21 @@ export class CertificateService {
 
       const newId = newCertRes.rows[0].id;
 
-      // 2. Revoke old certificate and link replaced_by
+      // Record new certificate issuance in certificate_status_history
       await tx.query(
-        `UPDATE certificates
-         SET is_revoked = true,
-             revocation_reason = $1,
-             revoked_at = CURRENT_TIMESTAMP,
-             revoked_by = $2,
-             replaced_by_certificate_id = $3
-         WHERE id = $4`,
-        [`Replaced by reissued certificate ${newCertificateCode}: ${reason}`, userId || null, newId, oldCert.id]
+        `INSERT INTO certificate_status_history (
+          certificate_id, previous_status, new_status, reason, changed_by
+        ) VALUES ($1, 'draft', 'active', $2, $3)`,
+        [newId, `Reissuance replacing certificate ${oldCert.certificateCode}: ${reason}`, userId || null]
       );
 
-      // 3. Update Season
+      // 3. Link replaced_by on old certificate
+      await tx.query(
+        `UPDATE certificates SET replaced_by_certificate_id = $1 WHERE id = $2`,
+        [newId, oldCert.id]
+      );
+
+      // 4. Update Season
       await tx.query(
         `UPDATE seasons
          SET actual_harvest_date = $1,
@@ -529,12 +570,69 @@ export class CertificateService {
   }
 
   /**
-   * Retrieves a certificate by its unique database ID.
+   * Regenerates a certificate's PDF:
+   * Re-runs the PDF generation pipeline without changing the certificate's underlying data,
+   * preserving the certificate number and issue date, incrementing the PDF version,
+   * saving certificate-<code_v<ver>.pdf in storage, and updating the active version.
    */
-  async getCertificateById(id: string): Promise<CertificateRecord | null> {
-    const res = await db.query(`SELECT * FROM certificates WHERE id = $1`, [id]);
-    if (res.rows.length === 0) return null;
+  async regenerateCertificate(certificateId: string, userId?: string): Promise<CertificateRecord> {
+    const cert = await this.getCertificateById(certificateId);
+    if (!cert) {
+      throw new Error(`Certificate with ID ${certificateId} not found`);
+    }
+
+    const currentVersion = cert.version || 1;
+    const newVersion = currentVersion + 1;
+    const updatedCert: CertificateRecord = { ...cert, version: newVersion };
+
+    // Re-run PDF generation pipeline
+    const pdfBuffer = await pdfCertificateService.generateCertificatePdf(updatedCert);
+    const pdfPath = await pdfCertificateService.saveCertificatePdfBuffer(updatedCert, pdfBuffer);
+
+    // Update version and pdf_path in database while preserving certificate code and issue date
+    const res = await db.query(
+      `UPDATE certificates 
+       SET version = $1, pdf_path = $2
+       WHERE id = $3
+       RETURNING *`,
+      [newVersion, pdfPath, cert.id]
+    );
+
     return this.mapCertificateRow(res.rows[0]);
+  }
+
+  /**
+   * Retrieves a certificate by its unique database ID or certificate code.
+   */
+  async getCertificateById(idOrCode: string): Promise<CertificateRecord | null> {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrCode);
+    const query = `
+      SELECT c.*,
+             f.full_name as farmer_name, f.farmer_code,
+             v.name as village_name,
+             cr.name as crop_name, cr.name_te as crop_name_te,
+             s.season_code, s.season_year, s.season_type
+      FROM certificates c
+      JOIN farmers f ON f.id = c.farmer_id
+      JOIN villages v ON v.id = f.village_id
+      JOIN crops cr ON cr.id = c.crop_id
+      JOIN seasons s ON s.id = c.season_id
+      WHERE ${isUuid ? 'c.id = $1' : 'c.certificate_code = $1'}
+    `;
+    const res = await db.query(query, [idOrCode]);
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      ...this.mapCertificateRow(row),
+      farmerName: row.farmer_name,
+      farmerCode: row.farmer_code,
+      villageName: row.village_name,
+      cropName: row.crop_name,
+      cropNameTe: row.crop_name_te,
+      seasonCode: row.season_code,
+      seasonYear: row.season_year,
+      seasonType: row.season_type,
+    } as any;
   }
 
   /**
@@ -572,7 +670,7 @@ export class CertificateService {
       monitoringCycleCoverage: Number(r.monitoring_cycle_coverage),
       confidenceScore: Number(r.confidence_score),
       confidenceBand: r.confidence_band,
-      waterUseRatio: Number(r.water_use_ratio),
+      waterUseRatio: r.water_use_ratio !== null && r.water_use_ratio !== undefined ? Number(r.water_use_ratio) : null,
       waterUseRatioBand: r.water_use_ratio_band,
       isCertificateEligible: Boolean(r.is_certificate_eligible),
       ineligibilityReasons: typeof r.ineligibility_reasons === 'string' ? JSON.parse(r.ineligibility_reasons) : r.ineligibility_reasons,
@@ -584,28 +682,48 @@ export class CertificateService {
   }
 
   /**
-   * Lists certificates with optional village scoping and pagination.
+   * Lists certificates with optional village scoping, farmer filtering, and pagination.
    */
-  async listCertificates(scopedVillages: string[] | null, options: { page?: number; limit?: number } = {}) {
+  async listCertificates(
+    scopedVillages: string[] | null,
+    options: { page?: number; limit?: number; farmerId?: string; search?: string } = {}
+  ) {
     const page = Math.max(1, options.page || 1);
     const limit = Math.min(100, Math.max(1, options.limit || 20));
     const offset = (page - 1) * limit;
 
-    let filterClause = '';
+    const conditions: string[] = [];
     const params: any[] = [];
+    let pIdx = 1;
 
     if (scopedVillages !== null) {
       if (scopedVillages.length === 0) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
       }
+      conditions.push(`f.village_id = ANY($${pIdx})`);
       params.push(scopedVillages);
-      filterClause = ` WHERE f.village_id = ANY($1)`;
+      pIdx++;
     }
+
+    if (options.farmerId) {
+      conditions.push(`c.farmer_id = $${pIdx}`);
+      params.push(options.farmerId);
+      pIdx++;
+    }
+
+    if (options.search) {
+      conditions.push(`(f.full_name ILIKE $${pIdx} OR f.farmer_code ILIKE $${pIdx} OR c.certificate_code ILIKE $${pIdx} OR v.name ILIKE $${pIdx})`);
+      params.push(`%${options.search}%`);
+      pIdx++;
+    }
+
+    const filterClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
 
     const countRes = await db.query(
       `SELECT COUNT(*)::int as total
        FROM certificates c
        JOIN farmers f ON f.id = c.farmer_id
+       JOIN villages v ON v.id = f.village_id
        ${filterClause}`,
       params
     );
@@ -631,7 +749,17 @@ export class CertificateService {
     );
 
     return {
-      data: listRes.rows.map(r => this.mapCertificateRow(r)),
+      data: listRes.rows.map(r => ({
+        ...this.mapCertificateRow(r),
+        farmerName: r.farmer_name,
+        farmerCode: r.farmer_code,
+        villageName: r.village_name,
+        cropName: r.crop_name,
+        cropNameTe: r.crop_name_te,
+        seasonCode: r.season_code,
+        seasonYear: r.season_year,
+        seasonType: r.season_type,
+      })),
       total,
       page,
       limit,
@@ -657,7 +785,8 @@ export class CertificateService {
               c.snapshot_data, c.sha256_hash,
               v.name as village_name,
               cr.name as crop_name, cr.name_te as crop_name_te,
-              s.season_year, s.season_type
+              s.season_year, s.season_type, s.data_origin as season_origin,
+              f.data_origin as farmer_origin
        FROM certificates c
        JOIN farmers f ON f.id = c.farmer_id
        JOIN villages v ON v.id = f.village_id
@@ -679,6 +808,7 @@ export class CertificateService {
     const hashMatches = computedHash === r.sha256_hash;
     const isRevoked = Boolean(r.is_revoked);
     const isValid = hashMatches && !isRevoked;
+    const isDemo = r.season_origin === 'demo' || r.farmer_origin === 'demo' || r.certificate_code === 'JALAMITRA-2026-00001' || String(r.certificate_code).includes('DEMO');
 
     return {
       certificateNumber: r.certificate_code,
@@ -689,9 +819,63 @@ export class CertificateService {
       status: isRevoked ? 'revoked' : (isValid ? 'valid' : 'revoked'),
       isValid,
       isRevoked,
+      isDemo: Boolean(isDemo),
       revocationReason: isRevoked ? (r.revocation_reason || 'Administrative revocation') : null,
       sha256Validated: hashMatches,
     };
+  }
+
+  /**
+   * Seals an active certificate (Admin only).
+   * Freezes certificate against routine edits/reissuances.
+   */
+  async sealCertificate(
+    certificateId: string,
+    reason: string,
+    userId: string
+  ): Promise<CertificateRecord> {
+    if (!reason || !reason.trim()) {
+      throw new Error('Mandatory reason required to seal certificate');
+    }
+
+    const existing = await this.getCertificateById(certificateId);
+    if (!existing) {
+      throw new Error(`Certificate with ID ${certificateId} not found`);
+    }
+
+    if (existing.isRevoked || existing.status === 'revoked') {
+      throw new Error('Cannot seal a revoked certificate');
+    }
+
+    if (existing.status === 'sealed') {
+      return existing;
+    }
+
+    let updatedCert: CertificateRecord | null = null;
+
+    await withTransaction(async (tx) => {
+      const res = await tx.query(
+        `UPDATE certificates
+         SET status = 'sealed',
+             sealed_at = CURRENT_TIMESTAMP,
+             sealed_reason = $1,
+             sealed_by = $2
+         WHERE id = $3
+         RETURNING *`,
+        [reason, userId, certificateId]
+      );
+
+      await tx.query(
+        `INSERT INTO certificate_status_history (
+          certificate_id, previous_status, new_status, reason, changed_by
+        ) VALUES ($1, $2, 'sealed', $3, $4)`,
+        [certificateId, existing.status || 'active', reason, userId]
+      );
+
+      updatedCert = this.mapCertificateRow(res.rows[0]);
+    });
+
+    return updatedCert!;
   }
 
   /**
@@ -702,22 +886,66 @@ export class CertificateService {
     reason: string,
     userId: string
   ): Promise<CertificateRecord> {
-    const res = await db.query(
-      `UPDATE certificates
-       SET is_revoked = true,
-           revocation_reason = $1,
-           revoked_at = CURRENT_TIMESTAMP,
-           revoked_by = $2
-       WHERE id = $3
-       RETURNING *`,
-      [reason, userId, certificateId]
-    );
+    if (!reason || !reason.trim()) {
+      throw new Error('Mandatory reason required to revoke certificate');
+    }
 
-    if (res.rows.length === 0) {
+    const existing = await this.getCertificateById(certificateId);
+    if (!existing) {
       throw new Error(`Certificate with ID ${certificateId} not found`);
     }
 
-    return this.mapCertificateRow(res.rows[0]);
+    let updatedCert: CertificateRecord | null = null;
+
+    await withTransaction(async (tx) => {
+      const res = await tx.query(
+        `UPDATE certificates
+         SET status = 'revoked',
+             is_revoked = true,
+             revocation_reason = $1,
+             revoked_at = CURRENT_TIMESTAMP,
+             revoked_by = $2
+         WHERE id = $3
+         RETURNING *`,
+        [reason, userId, certificateId]
+      );
+
+      await tx.query(
+        `INSERT INTO certificate_status_history (
+          certificate_id, previous_status, new_status, reason, changed_by
+        ) VALUES ($1, $2, 'revoked', $3, $4)`,
+        [certificateId, existing.status || 'active', reason, userId]
+      );
+
+      updatedCert = this.mapCertificateRow(res.rows[0]);
+    });
+
+    return updatedCert!;
+  }
+
+  /**
+   * Retrieves certificate status history audit trail.
+   */
+  async getCertificateHistory(certificateId: string): Promise<any[]> {
+    const res = await db.query(
+      `SELECT h.*, u.name as changed_by_name
+       FROM certificate_status_history h
+       LEFT JOIN users u ON u.id = h.changed_by
+       WHERE h.certificate_id = $1
+       ORDER BY h.created_at ASC`,
+      [certificateId]
+    );
+
+    return res.rows.map((r) => ({
+      id: r.id,
+      certificateId: r.certificate_id,
+      previousStatus: r.previous_status,
+      newStatus: r.new_status,
+      reason: r.reason,
+      changedBy: r.changed_by,
+      changedByName: r.changed_by_name || null,
+      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    }));
   }
 
   private mapCertificateRow(r: any): CertificateRecord {
@@ -728,7 +956,7 @@ export class CertificateService {
       farmerId: r.farmer_id,
       plotId: r.plot_id,
       cropId: r.crop_id,
-      waterUseRatio: Number(r.water_use_ratio),
+      waterUseRatio: r.water_use_ratio !== null && r.water_use_ratio !== undefined ? Number(r.water_use_ratio) : null,
       waterUseRatioBand: r.water_use_ratio_band,
       confidenceScore: Number(r.confidence_score),
       confidenceBand: r.confidence_band,
@@ -743,6 +971,10 @@ export class CertificateService {
       replacesCertificateId: r.replaces_certificate_id || null,
       replacedByCertificateId: r.replaced_by_certificate_id || null,
       version: Number(r.version || 1),
+      status: (r.status || (r.is_revoked ? 'revoked' : 'active')) as any,
+      sealedAt: r.sealed_at instanceof Date ? r.sealed_at.toISOString() : r.sealed_at || null,
+      sealedReason: r.sealed_reason || null,
+      sealedBy: r.sealed_by || null,
       isRevoked: Boolean(r.is_revoked),
       revokedAt: r.revoked_at,
       revocationReason: r.revocation_reason,

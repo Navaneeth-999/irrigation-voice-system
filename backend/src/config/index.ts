@@ -1,7 +1,22 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { z } from 'zod';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Explicitly resolve backend/.env relative to this source/runtime file location.
+// In both development (backend/src/config) and compiled production (backend/dist/config),
+// path.resolve(__dirname, '../../.env') reliably targets backend/.env regardless of process.cwd().
+const backendEnvPath = path.resolve(__dirname, '../../.env');
+if (fs.existsSync(backendEnvPath)) {
+  dotenv.config({ path: backendEnvPath, override: false });
+}
+
+// Fallback to process.cwd() .env for external configurations, preserving existing env vars
+dotenv.config({ override: false });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -10,8 +25,10 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
 
   // Database
+  DATABASE_MODE: z.enum(['postgres', 'pglite', 'auto']).default('auto'),
   DATABASE_URL: z.string().optional(),
   DIRECT_DATABASE_URL: z.string().optional(),
+  TEST_DATABASE_URL: z.string().optional(),
   SUPABASE_URL: z.string().optional(),
   SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),

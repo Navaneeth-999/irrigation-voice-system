@@ -37,25 +37,38 @@ describe('Phase 4: Weather, Alerts & Communication Engine Tests', () => {
 
     app = createApp();
 
-    // 1. Authenticate Admin with X-Requested-With header
-    const loginRes = await request(app)
+    // 1. Authenticate Admin (handle both fresh seed and re-runs)
+    let loginRes = await request(app)
       .post('/api/v1/auth/login')
       .set('X-Requested-With', 'XMLHttpRequest')
-      .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+      .send({ email: 'admin@csp-irrigation.org', password: 'NewAdminPassword456!' });
+
+    if (loginRes.status !== 200) {
+      loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+    }
 
     expect(loginRes.status).toBe(200);
     const cookies = loginRes.headers['set-cookie'];
-    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : cookies;
+    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : (cookies || '');
 
-    // Change password to clear must_change_password flag
-    await request(app)
-      .post('/api/v1/auth/change-password')
-      .set('Cookie', adminCookie)
-      .set('X-Requested-With', 'XMLHttpRequest')
-      .send({
-        currentPassword: 'ChangeMeAdmin123!',
-        newPassword: 'NewAdminPassword456!',
-      });
+    // Clear must_change_password if newly initialized
+    if (loginRes.body?.data?.user?.mustChangePassword) {
+      const changeRes = await request(app)
+        .post('/api/v1/auth/change-password')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          currentPassword: 'ChangeMeAdmin123!',
+          newPassword: 'NewAdminPassword456!',
+        });
+      const newCookies = changeRes.headers['set-cookie'];
+      if (newCookies) {
+        adminCookie = Array.isArray(newCookies) ? newCookies.join('; ') : newCookies;
+      }
+    }
 
     const meRes = await request(app)
       .get('/api/v1/auth/me')

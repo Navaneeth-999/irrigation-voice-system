@@ -25,7 +25,9 @@ interface DashboardKPIs {
   callsCompleted: number;
   callsPending: number;
   openActionItems: number;
-  estimatedWaterUsageL: number;
+  estimatedWaterUsageL: number | null;
+  hasIrrigationRecords?: boolean;
+  waterRecordsCount?: number;
 }
 
 export const DashboardPage: React.FC = () => {
@@ -43,8 +45,18 @@ export const DashboardPage: React.FC = () => {
     { label: 'Total Farmers', value: kpis?.totalFarmers ?? 0, sub: `${kpis?.activeFarmers ?? 0} active`, icon: Users, color: 'text-forest-700 bg-forest-50' },
     { label: 'Cultivated Land', value: `${(kpis?.totalAcres ?? 0).toFixed(1)} Ac`, sub: 'Across registered plots', icon: MapPin, color: 'text-soil-700 bg-soil-50' },
     { label: 'Active Seasons', value: kpis?.activeSeasons ?? 0, sub: `${kpis?.completedSeasons ?? 0} completed`, icon: Calendar, color: 'text-emerald-700 bg-emerald-50' },
-    { label: 'Voice Calls', value: kpis?.callsCompleted ?? 0, sub: `${kpis?.callsPending ?? 0} pending`, icon: PhoneCall, color: 'text-blue-700 bg-blue-50' },
-    { label: 'Est. Water Used', value: `${((kpis?.estimatedWaterUsageL ?? 0) / 1000).toFixed(0)} kL`, sub: 'Estimated proxy metric', icon: Droplets, color: 'text-water-700 bg-water-50' },
+    { label: 'Voice Calls', value: kpis?.callsCompleted ?? 0, sub: `${kpis?.callsPending ?? 0} scheduled`, icon: PhoneCall, color: 'text-blue-700 bg-blue-50' },
+    { 
+      label: 'Est. Water Used', 
+      value: kpis?.estimatedWaterUsageL !== null && kpis?.estimatedWaterUsageL !== undefined
+        ? `${((kpis.estimatedWaterUsageL) / 1000).toFixed(0)} kL`
+        : 'No records', 
+      sub: kpis?.estimatedWaterUsageL !== null && kpis?.estimatedWaterUsageL !== undefined
+        ? (kpis.estimatedWaterUsageL === 0 ? 'Farmer reported 0 L usage' : 'Estimated pump proxy')
+        : 'Awaiting farmer logs', 
+      icon: Droplets, 
+      color: 'text-water-700 bg-water-50' 
+    },
     { label: 'Open Actions', value: kpis?.openActionItems ?? 0, sub: 'Needs field follow-up', icon: AlertTriangle, color: 'text-amber-700 bg-amber-50' },
   ];
 

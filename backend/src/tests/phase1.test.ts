@@ -166,6 +166,7 @@ describe('Phase 1: Foundation & Core Domain Tests', () => {
 
   describe('4. Users & Scoping RBAC', () => {
     let panchayatUserId: string;
+    const panchayatEmail = `officer.tenali.${Date.now()}@panchayat.ap.gov`;
 
     it('ADMIN creates an AGRI_PANCHAYAT user', async () => {
       const res = await request(app)
@@ -174,7 +175,7 @@ describe('Phase 1: Foundation & Core Domain Tests', () => {
         .set('X-Requested-With', 'XMLHttpRequest')
         .send({
           name: 'Panchayat Officer Tenali',
-          email: 'officer.tenali@panchayat.ap.gov',
+          email: panchayatEmail,
           password: 'OfficerPassword123!',
           role: 'AGRI_PANCHAYAT',
         });
@@ -204,7 +205,7 @@ describe('Phase 1: Foundation & Core Domain Tests', () => {
         .post('/api/v1/auth/login')
         .set('X-Requested-With', 'XMLHttpRequest')
         .send({
-          email: 'officer.tenali@panchayat.ap.gov',
+          email: panchayatEmail,
           password: 'OfficerPassword123!',
         });
 

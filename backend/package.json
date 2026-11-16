@@ -20,7 +20,8 @@
     "demo:reset": "tsx src/scripts/demo-reset.ts",
     "create-admin": "tsx src/scripts/create-admin.ts",
     "twilio:spike": "tsx src/scripts/twilio-spike.ts",
-    "test:locking": "tsx src/scripts/verify-postgres-locking.ts"
+    "test:locking": "tsx src/scripts/verify-postgres-locking.ts",
+    "postinstall": "node scripts/patch-fontkit.js"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.16",
@@ -33,6 +34,7 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "libphonenumber-js": "^1.11.19",
+    "multer": "^2.5.0",
     "node-cron": "^3.0.3",
     "pdfkit": "^0.16.0",
     "pg": "^8.13.3",
@@ -48,6 +50,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.9",
+    "@types/multer": "^2.3.0",
     "@types/node": "^22.13.9",
     "@types/node-cron": "^3.0.11",
     "@types/pdfkit": "^0.13.9",

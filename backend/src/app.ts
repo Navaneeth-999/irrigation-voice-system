@@ -27,6 +27,10 @@ import { telephonyRouter, twilioWebhookRouter } from './modules/telephony/routes
 import weatherRoutes from './modules/weather/routes.js';
 import communicationRoutes from './modules/communication/routes.js';
 import certificatesRoutes from './modules/certificates/routes.js';
+import settingsRoutes from './modules/settings/routes.js';
+import observationRoutes from './modules/observations/routes.js';
+import surveysRoutes from './modules/surveys/routes.js';
+import auditRoutes from './modules/audit/routes.js';
 
 export function createApp(): express.Application {
   const app = express();
@@ -60,12 +64,17 @@ export function createApp(): express.Application {
     next();
   });
 
+  // Protect private observation photographs from direct unauthenticated static access
+  app.use('/storage/observations', (_req, res) => {
+    res.status(403).json({ success: false, error: 'Direct static access to observation storage is forbidden' });
+  });
+
   // Local storage static route
   const storageDir = path.resolve(process.cwd(), config.STORAGE_LOCAL_DIR);
   app.use('/storage', express.static(storageDir));
 
   // Health and Readiness probes
-  app.get('/healthz', (_req, res) => {
+  app.get(['/healthz', '/api/v1/health'], (_req, res) => {
     res.json({
       status: 'ok',
       uptime: process.uptime(),
@@ -106,6 +115,10 @@ export function createApp(): express.Application {
   apiRouter.use('/weather', weatherRoutes);
   apiRouter.use('/communication', communicationRoutes);
   apiRouter.use('/certificates', certificatesRoutes);
+  apiRouter.use('/settings', settingsRoutes);
+  apiRouter.use('/observations', observationRoutes);
+  apiRouter.use('/surveys', surveysRoutes);
+  apiRouter.use('/audit', auditRoutes);
 
   app.use('/api/v1', apiRouter);
 

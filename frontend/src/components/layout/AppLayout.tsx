@@ -10,6 +10,7 @@ import {
   PhoneCall,
   BarChart3,
   Award,
+  Camera,
   Settings,
   ShieldAlert,
   LogOut,
@@ -17,6 +18,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { Badge } from '../ui/Badge.js';
+import { APP_NAME, APP_NAME_TE, APP_TAGLINE, ORG_NAME } from '../../config/branding.js';
 
 export const AppLayout: React.FC = () => {
   const { user, logout } = useAuth();
@@ -37,6 +39,7 @@ export const AppLayout: React.FC = () => {
     { label: 'Call Simulator', path: '/demo/call-simulator', icon: PhoneCall },
     { label: 'Water Analytics', path: '/analytics', icon: BarChart3 },
     { label: 'Certificates', path: '/certificates', icon: Award },
+    { label: 'Field Observations', path: '/observations', icon: Camera },
     ...(user?.role === 'ADMIN' ? [
       { label: 'Settings', path: '/settings', icon: Settings },
       { label: 'Audit Logs', path: '/audit', icon: ShieldAlert },
@@ -46,9 +49,9 @@ export const AppLayout: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
       {/* Top Demo Banner */}
-      <div className="bg-amber-600 text-white text-xs font-semibold py-1 px-4 text-center tracking-wide flex items-center justify-center space-x-2">
-        <span>🌱 B.Tech Community Service Project (CSP) — Intelligent Irrigation & Conservation Platform</span>
-        <span className="bg-amber-800/80 px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider">Demo / Dev Mode</span>
+      <div className="bg-emerald-800 text-white text-xs font-semibold py-1 px-4 text-center tracking-wide flex items-center justify-center space-x-2">
+        <span>🌱 {APP_NAME} — {APP_TAGLINE}</span>
+        <span className="bg-emerald-950/80 px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider">Active System</span>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -56,15 +59,13 @@ export const AppLayout: React.FC = () => {
         <aside className="w-64 bg-forest-950 text-white flex flex-col justify-between shrink-0 shadow-lg border-r border-forest-900">
           <div>
             {/* Logo / Branding */}
-            <div className="h-16 px-6 flex items-center space-x-3 border-b border-forest-900/80 bg-forest-950/60">
-              <div className="w-9 h-9 rounded-xl bg-forest-600 flex items-center justify-center text-white shadow-inner">
+            <div className="h-16 px-4 flex items-center space-x-2.5 border-b border-forest-900/80 bg-forest-950/60">
+              <div className="w-9 h-9 rounded-xl bg-forest-600 flex items-center justify-center text-white shadow-inner shrink-0">
                 <Droplets className="w-5 h-5 text-white" />
               </div>
-              <div>
-                <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-1.5">
-                  జలమిత్ర <span className="text-xs font-medium text-forest-300">Jalamitra</span>
-                </h1>
-                <p className="text-[10px] text-forest-400 font-medium tracking-wider uppercase">Voice Irrigation CSP</p>
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-semibold text-forest-300 leading-tight truncate">{APP_NAME_TE}</div>
+                <div className="text-xs font-bold text-white leading-tight truncate">{APP_NAME}</div>
               </div>
             </div>
 

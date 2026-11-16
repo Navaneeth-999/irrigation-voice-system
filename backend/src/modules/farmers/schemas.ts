@@ -18,13 +18,32 @@ export const createFarmerSchema = z.object({
 
 export const updateFarmerSchema = z.object({
   full_name: z.string().min(2).optional(),
-  village_id: z.string().uuid().optional(),
+  name: z.string().min(2).optional(),
+  village_id: z.string().optional(),
+  village: z.string().optional(),
+  phone: z.string().min(10).optional(),
+  phone_number: z.string().min(10).optional(),
+  crop_type: z.string().optional(),
+  land_area_acres: z.number().positive('Land area must be a positive number').optional(),
+  water_source: z.enum(['borewell', 'canal', 'open_well', 'tank', 'rainfed']).optional(),
   address: z.string().optional(),
   gram_panchayat: z.string().optional(),
   preferred_language: z.string().optional(),
   call_window_start: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
   call_window_end: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
   notes: z.string().optional(),
+});
+
+export const sendOtpSchema = z.object({
+  phone: z.string().min(10, 'Valid 10-digit phone number is required'),
+  mode: z.enum(['simulation', 'live']).default('simulation'),
+  farmerId: z.string().uuid().optional(),
+});
+
+export const verifyOtpSchema = z.object({
+  phone: z.string().min(10),
+  otp: z.string().length(6, 'OTP must be 6 digits'),
+  farmerId: z.string().uuid().optional(),
 });
 
 export const createContactSchema = z.object({

@@ -29,12 +29,10 @@ import { AnalyticsPage } from './pages/AnalyticsPage.js';
 // Phase 6 Pages
 import { CertificatesPage } from './pages/CertificatesPage.js';
 import { PublicVerificationPage } from './pages/PublicVerificationPage.js';
+import { ObservationsPage } from './pages/ObservationsPage.js';
 
-// Subsequent Phase Pages (Placeholders)
-import {
-  SettingsPage,
-  AuditPage,
-} from './pages/PhasePlaceholders.js';
+import { SettingsPage } from './pages/SettingsPage.js';
+import { AuditPage } from './pages/AuditPage.js';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -80,8 +78,11 @@ export const App: React.FC = () => {
               {/* Phase 4 Route */}
               <Route path="weather" element={<WeatherAlertsPage />} />
               <Route path="demo/call-simulator" element={<CallSimulatorPage />} />
+              <Route path="call-simulator" element={<CallSimulatorPage />} />
+              <Route path="simulator" element={<CallSimulatorPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
               <Route path="certificates" element={<CertificatesPage />} />
+              <Route path="observations" element={<ObservationsPage />} />
               <Route
                 path="settings"
                 element={

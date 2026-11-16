@@ -252,3 +252,53 @@ Navigate to:
 - `http://localhost:5173/certificates` to view issued conservation certificates and download PDFs.
 - `http://localhost:5173/verify/JALAMITRA-2026-00001` to test the public verification portal.
 
+---
+
+## Phase 7: System Hardening, Production Deployment Runbooks & 22-Step E2E Evaluation
+
+### Delivered in Phase 7
+1. **Pristine Benchmark Demo Reset Utility (`npm run demo:reset`):**
+   - Completely idempotent database reset and demo data orchestrator (`backend/src/scripts/demo-reset.ts`).
+   - Ensures migrations `001` through `009` are applied, seeds Telugu reference prompts, and seeds 4 realistic evaluation farmers:
+     - `F-DEMO-001`: Venkata Subbaiah (Active Paddy, 4 call cycles, Clay Loam, Guntur Rural).
+     - `F-DEMO-002`: Koteswara Rao (Active Maize with drip irrigation, Tenali North).
+     - `F-DEMO-003`: Lakshmi Devi (Completed Chilli season with accredited Water Conservation Certificate `JALAMITRA-2026-00001`).
+     - `F-DEMO-004`: Srinivasa Rao (Completed Blackgram season with ineligible Seasonal Water Summary Report `REP-2026-00001`).
+   - Pre-generates cryptographically sealed PDFs and summary reports in local storage.
+2. **22-Step Playwright E2E Comprehensive Evaluation Suite:**
+   - Automated end-to-end evaluation script (`frontend/e2e/demo.spec.ts`) executing local Chromium/Chrome through all 22 evaluation steps:
+     - Step 1: Admin login (`admin@csp-irrigation.org`)
+     - Step 2: Dashboard KPIs and operational metrics
+     - Step 3: Farmers directory search and filter
+     - Step 4: Farmer detail view & consent audit trail
+     - Step 5: Plot details & pump specifications (HP & LPH)
+     - Step 6: Active cultivation seasons table
+     - Step 7: Season detail view & stage timeline
+     - Step 8: Interactive Phone Call Simulator view
+     - Step 9: Execute DTMF keypad call flow through 10-question Telugu survey
+     - Step 10: Verify DTMF log, transcript, and audio prompts review
+     - Step 11: Field Action Items Queue view
+     - Step 12: Resolve action item with agronomist notes
+     - Step 13: Weather records & IMD alert rules view
+     - Step 14: Alert deduplication and fan-out verification
+     - Step 15: Publish village-scoped agronomist advisory
+     - Step 16: Conservation Analytics FAO-56 Engine view
+     - Step 17: Water Use Ratio (WUR) indicative band inspection
+     - Step 18: Unvalidated Assumptions banner verification
+     - Step 19: Season completion & eligibility gating check
+     - Step 20: Sealed Conservation Certificate (SHA-256)
+     - Step 21: Bilingual Certificate PDF verification (`application/pdf`)
+     - Step 22: Public Verification & Zero PII Leakage Check (`/verify/:code`).
+3. **Production Deployment Runbook (`docs/DEPLOYMENT.md`):**
+   - Complete guides for Supabase session pooler configuration (`aws-0-<region>.pooler.supabase.com:5432`).
+   - Backend container deployment (Render, Fly.io, AWS ECS) with fail-fast production startup validation.
+   - Frontend SPA routing rewrites for Vercel and Netlify.
+   - Twilio voice and SMS webhook routing and India TRAI/DLT compliance.
+4. **Fontkit Typography & Telugu Shaper Resilience:**
+   - Patched fontkit GPOS OpenType shaper to handle missing mark anchors on Telugu conjunct glyphs (e.g. `శ్రీ`), preventing null pointer crashes in PDFKit.
+   - Automated persistent patch via `postinstall` script in `backend/package.json`.
+5. **Full System Verification:**
+   - 120/120 automated unit and integration tests passing across all 6 test suites against live remote Supabase PostgreSQL.
+   - Clean production compilation (`npm run build`) in both `backend` and `frontend`.
+
+

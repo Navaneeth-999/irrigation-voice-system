@@ -41,27 +41,45 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
     await createAdminUser();
     app = createApp();
 
-    // 1. Authenticate admin and clear must_change_password
-    const loginRes = await request(app)
+    // 1. Authenticate admin (handle both fresh seed and re-runs)
+    let loginRes = await request(app)
       .post('/api/v1/auth/login')
       .set('X-Requested-With', 'XMLHttpRequest')
       .send({
         email: 'admin@csp-irrigation.org',
-        password: 'ChangeMeAdmin123!',
+        password: 'NewAdminPassword456!',
       });
-    adminCookie = loginRes.headers['set-cookie']?.[0] || '';
+
+    if (loginRes.status !== 200) {
+      loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          email: 'admin@csp-irrigation.org',
+          password: 'ChangeMeAdmin123!',
+        });
+    }
+
+    const cookies = loginRes.headers['set-cookie'];
+    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : (cookies || '');
 
     const userRes = await db.query("SELECT id FROM users WHERE email = 'admin@csp-irrigation.org'");
     adminUserId = userRes.rows[0].id;
 
-    await request(app)
-      .post('/api/v1/auth/change-password')
-      .set('Cookie', adminCookie)
-      .set('X-Requested-With', 'XMLHttpRequest')
-      .send({
-        currentPassword: 'ChangeMeAdmin123!',
-        newPassword: 'NewAdminPassword456!',
-      });
+    if (loginRes.body?.data?.user?.mustChangePassword) {
+      const changeRes = await request(app)
+        .post('/api/v1/auth/change-password')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          currentPassword: 'ChangeMeAdmin123!',
+          newPassword: 'NewAdminPassword456!',
+        });
+      const newCookies = changeRes.headers['set-cookie'];
+      if (newCookies) {
+        adminCookie = Array.isArray(newCookies) ? newCookies.join('; ') : newCookies;
+      }
+    }
 
     // 2. Reference data IDs
     const villageRes = await db.query('SELECT id FROM villages LIMIT 1');
@@ -78,6 +96,7 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
     await db.query(`
       INSERT INTO users (email, password_hash, name, role, is_active, must_change_password)
       VALUES ('viewer@csp-test.org', $1, 'Viewer Official', 'AGRI_PANCHAYAT', true, false)
+      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
     `, [viewerPasswordHash]);
 
     const viewerLogin = await request(app)
@@ -88,6 +107,24 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
         password: 'ViewerPassword123!',
       });
     viewerCookie = viewerLogin.headers['set-cookie']?.[0] || '';
+
+    // Clean up test farmers from any previous runs
+    const existingP3 = await db.query(`SELECT id FROM farmers WHERE farmer_code IN ('F-REAL-P3', 'F-DEMO-P3')`);
+    for (const f of existingP3.rows) {
+      const seasons = await db.query(`SELECT id FROM seasons WHERE farmer_id = $1`, [f.id]);
+      for (const s of seasons.rows) {
+        await db.query(`DELETE FROM call_schedule WHERE season_id = $1`, [s.id]);
+        await db.query(`DELETE FROM action_items WHERE season_id = $1`, [s.id]);
+        await db.query(`DELETE FROM irrigation_records WHERE season_id = $1`, [s.id]);
+        await db.query(`DELETE FROM farmer_feedback WHERE season_id = $1`, [s.id]);
+        await db.query(`DELETE FROM crop_progress WHERE season_id = $1`, [s.id]);
+        await db.query(`DELETE FROM seasons WHERE id = $1`, [s.id]);
+      }
+      await db.query(`DELETE FROM plots WHERE farmer_id = $1`, [f.id]);
+      await db.query(`DELETE FROM consents WHERE farmer_id = $1`, [f.id]);
+      await db.query(`DELETE FROM farmer_contacts WHERE farmer_id = $1`, [f.id]);
+      await db.query(`DELETE FROM farmers WHERE id = $1`, [f.id]);
+    }
 
     // 3. Real farmer (for gating test)
     const realFarmerRes = await db.query(`
@@ -638,11 +675,12 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
       const villageRes = await db.query('SELECT id FROM villages LIMIT 1');
       const villageId = villageRes.rows[0].id;
 
+      const optOutCode = `F-OPTOUT-${Date.now()}`;
       const fRes = await db.query(`
         INSERT INTO farmers (farmer_code, full_name, village_id, status, data_origin)
-        VALUES ('F-OPTOUT-TEST', 'Opt Out Farmer', $1, 'active', 'demo')
+        VALUES ($1, 'Opt Out Farmer', $2, 'active', 'demo')
         RETURNING id
-      `, [villageId]);
+      `, [optOutCode, villageId]);
       const optOutFarmerId = fRes.rows[0].id;
 
       await db.query(`
@@ -807,11 +845,12 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
       const qSetId = qSetRes.rows[0].id;
 
       // Create farmer with withdrawn consent
+      const noConsentCode = `F-NO-CONSENT-${Date.now()}`;
       const fNoConsent = await db.query(`
         INSERT INTO farmers (farmer_code, full_name, village_id, status, data_origin)
-        VALUES ('F-NO-CONSENT', 'No Consent Farmer', $1, 'active', 'demo')
+        VALUES ($1, 'No Consent Farmer', $2, 'active', 'demo')
         RETURNING id
-      `, [villageId]);
+      `, [noConsentCode, villageId]);
       const noConsentFarmerId = fNoConsent.rows[0].id;
 
       await db.query(`
@@ -829,11 +868,12 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
       `, [demoSeasonId, qSetId, noConsentFarmerId]);
 
       // Create farmer that already has an attempt today (daily cap)
+      const cappedCode = `F-DAILY-CAPPED-${Date.now()}`;
       const fCapped = await db.query(`
         INSERT INTO farmers (farmer_code, full_name, village_id, status, data_origin)
-        VALUES ('F-DAILY-CAPPED', 'Daily Capped Farmer', $1, 'active', 'demo')
+        VALUES ($1, 'Daily Capped Farmer', $2, 'active', 'demo')
         RETURNING id
-      `, [villageId]);
+      `, [cappedCode, villageId]);
       const cappedFarmerId = fCapped.rows[0].id;
 
       const schCapped = await db.query(`
@@ -871,11 +911,12 @@ describe('Phase 3: Telephony, Voice Flow, State Machine & Simulator Tests', () =
       const qSetRes = await db.query('SELECT id FROM call_question_sets LIMIT 1');
       const qSetId = qSetRes.rows[0].id;
 
+      const repeatedFailCode = `F-REPEATED-FAIL-${Date.now()}`;
       const fRes = await db.query(`
         INSERT INTO farmers (farmer_code, full_name, village_id, status, data_origin)
-        VALUES ('F-REPEATED-FAIL', 'Repeated Missed Farmer', $1, 'active', 'demo')
+        VALUES ($1, 'Repeated Missed Farmer', $2, 'active', 'demo')
         RETURNING id
-      `, [villageId]);
+      `, [repeatedFailCode, villageId]);
       const testFarmerId = fRes.rows[0].id;
 
       const plotRes = await db.query(`

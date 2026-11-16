@@ -31,35 +31,50 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
 
     app = createApp();
 
-    // Authenticate Admin
-    const loginRes = await request(app)
+    // Authenticate Admin (handle both fresh seed and re-runs)
+    let loginRes = await request(app)
       .post('/api/v1/auth/login')
       .set('X-Requested-With', 'XMLHttpRequest')
-      .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+      .send({ email: 'admin@csp-irrigation.org', password: 'NewAdminPassword456!' });
+
+    if (loginRes.status !== 200) {
+      loginRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ email: 'admin@csp-irrigation.org', password: 'ChangeMeAdmin123!' });
+    }
 
     const cookies = loginRes.headers['set-cookie'];
-    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : cookies;
+    adminCookie = Array.isArray(cookies) ? cookies.join('; ') : (cookies || '');
 
-    // Clear must_change_password
-    await request(app)
-      .post('/api/v1/auth/change-password')
-      .set('Cookie', adminCookie)
-      .set('X-Requested-With', 'XMLHttpRequest')
-      .send({
-        currentPassword: 'ChangeMeAdmin123!',
-        newPassword: 'NewAdminPassword456!',
-      });
+    // Clear must_change_password if newly initialized
+    if (loginRes.body?.data?.user?.mustChangePassword) {
+      const changeRes = await request(app)
+        .post('/api/v1/auth/change-password')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({
+          currentPassword: 'ChangeMeAdmin123!',
+          newPassword: 'NewAdminPassword456!',
+        });
+      const newCookies = changeRes.headers['set-cookie'];
+      if (newCookies) {
+        adminCookie = Array.isArray(newCookies) ? newCookies.join('; ') : newCookies;
+      }
+    }
 
     // Retrieve village
     const villageRes = await db.query(`SELECT id FROM villages LIMIT 1`);
     villageId = villageRes.rows[0].id;
 
+    const testRunSuffix = Math.random().toString(36).substring(2, 8);
+
     // Create test farmer
     const farmerRes = await db.query(
       `INSERT INTO farmers (farmer_code, full_name, village_id, preferred_language, status)
-       VALUES ('F-P6-TEST', 'Koteswara Rao', $1, 'te', 'active')
+       VALUES ($1, 'Koteswara Rao', $2, 'te', 'active')
        RETURNING id`,
-      [villageId]
+      [`F-P6-${testRunSuffix}`, villageId]
     );
     farmerId = farmerRes.rows[0].id;
 
@@ -84,9 +99,9 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
         season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
         season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
       )
-      VALUES ('S-2026-P6-001', $1, $2, $3, $4, 'kharif', 2026, '2026-06-01', '2026-09-30', 3.0, 'active', 'real')
+      VALUES ($1, $2, $3, $4, $5, 'kharif', 2026, '2026-06-01', '2026-09-30', 3.0, 'active', 'real')
       RETURNING id`,
-      [farmerId, plotId, cropId, methodId]
+      [`S-2026-P6-1-${testRunSuffix}`, farmerId, plotId, cropId, methodId]
     );
     seasonId = sRes.rows[0].id;
 
@@ -175,9 +190,9 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
           season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
           season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
         )
-        VALUES ('S-2026-DRAFT-01', $1, $2, $3, $4, 'rabi', 2026, '2026-10-01', '2027-02-01', 2.0, 'draft', 'real')
+        VALUES ($1, $2, $3, $4, $5, 'rabi', 2026, '2026-10-01', '2027-02-01', 2.0, 'draft', 'real')
         RETURNING id`,
-        [farmerId, plotId, cropId, methodId]
+        [`S-2026-DRAFT-${Math.random().toString(36).substring(2, 8)}`, farmerId, plotId, cropId, methodId]
       );
 
       const res = await request(app)
@@ -366,13 +381,14 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
       // 1. Create a second village
       const v2Res = await db.query(
         `INSERT INTO villages (name, mandal, district, gram_panchayat, latitude, longitude)
-         VALUES ('Guntur Canal Village', 'Tenali', 'Guntur', 'Tenali GP', 16.24, 80.64)
+         VALUES ('Guntur Canal Scoping Village', 'Tenali', 'Guntur', 'Tenali GP', 16.24, 80.64)
+         ON CONFLICT (name, mandal) DO UPDATE SET name = EXCLUDED.name
          RETURNING id`
       );
       const village2Id = v2Res.rows[0].id;
 
       // 2. Create AGRI_PANCHAYAT user assigned only to village2Id
-      const officerEmail = 'officer.certs@csp-irrigation.org';
+      const officerEmail = `officer.certs.${Math.random().toString(36).substring(2, 8)}@csp-irrigation.org`;
       const userRes = await request(app)
         .post('/api/v1/users')
         .set('Cookie', adminCookie)
@@ -430,9 +446,9 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
           season_code, farmer_id, plot_id, crop_id, irrigation_method_type_id,
           season_type, season_year, sowing_date, expected_harvest_date, area_acres_snapshot, status, data_origin
         )
-        VALUES ('S-2026-INELIG-001', $1, $2, $3, $4, 'kharif', 2026, '2026-06-01', '2026-09-30', 3.0, 'active', 'real')
+        VALUES ($1, $2, $3, $4, $5, 'kharif', 2026, '2026-06-01', '2026-09-30', 3.0, 'active', 'real')
         RETURNING id`,
-        [farmerId, plotId, cropId, methodId]
+        [`S-2026-INELIG-${Math.random().toString(36).substring(2, 8)}`, farmerId, plotId, cropId, methodId]
       );
       const ineligSeasonId = ineligSeasonRes.rows[0].id;
 
@@ -520,6 +536,55 @@ describe('Phase 6: Conservation Certificates, Immutable Snapshots & Public Verif
       expect(pubNew.status).toBe(200);
       expect(pubNew.body.data.status).toBe('valid');
       expect(pubNew.body.data.isValid).toBe(true);
+
+      // Verify v1's SHA-256 STILL verifies against its original immutable snapshot
+      const oldCertDb = await db.query(`SELECT snapshot_data, sha256_hash FROM certificates WHERE id = $1`, [issuedCertificateId]);
+      expect(snapshotService.verifyIntegrity(oldCertDb.rows[0].snapshot_data, oldCertDb.rows[0].sha256_hash)).toBe(true);
+
+      // Verify v2's SHA-256 verifies against its own independent snapshot
+      const newCertDb = await db.query(`SELECT snapshot_data, sha256_hash FROM certificates WHERE id = $1`, [newCert.id]);
+      expect(snapshotService.verifyIntegrity(newCertDb.rows[0].snapshot_data, newCertDb.rows[0].sha256_hash)).toBe(true);
+
+      // Verify that v1 and v2 snapshots and hashes are fully distinct and independent
+      expect(oldCertDb.rows[0].sha256_hash).not.toBe(newCertDb.rows[0].sha256_hash);
+
+      // Confirm non-admin cannot reissue certificates
+      const unauthorizedReissue = await request(app)
+        .post(`/api/v1/certificates/${newCert.id}/reissue`)
+        .send({ reason: 'Unauthorized reissue attempt' });
+      expect([401, 403]).toContain(unauthorizedReissue.status);
+    });
+  });
+
+  describe('9. Settings Management & Configurable Eligibility Thresholds', () => {
+    it('allows ADMIN to fetch and update certificate eligibility thresholds via Settings API', async () => {
+      // 1. Fetch settings
+      const getRes = await request(app)
+        .get('/api/v1/settings')
+        .set('Cookie', adminCookie);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.success).toBe(true);
+      expect(Array.isArray(getRes.body.data)).toBe(true);
+
+      const coverageSetting = getRes.body.data.find((s: any) => s.key === 'certificate_min_cycle_coverage_pct');
+      expect(coverageSetting).toBeDefined();
+
+      // 2. Update threshold via PUT /api/v1/settings/:key
+      const updateRes = await request(app)
+        .put('/api/v1/settings/certificate_min_cycle_coverage_pct')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ value: 55 });
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.success).toBe(true);
+      expect(updateRes.body.data.value).toBe(55);
+
+      // Revert back to 50
+      await request(app)
+        .put('/api/v1/settings/certificate_min_cycle_coverage_pct')
+        .set('Cookie', adminCookie)
+        .set('X-Requested-With', 'XMLHttpRequest')
+        .send({ value: 50 });
     });
   });
 });

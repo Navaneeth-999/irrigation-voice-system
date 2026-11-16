@@ -59,3 +59,9 @@ temp/
 coverage/
 .playwright/
 test-results/
+
+# Playwright test reports
+playwright-report/
+frontend/playwright-report/
+test-results/
+frontend/test-results/

@@ -52,6 +52,11 @@ router.get(
   (req, res) => certificateController.downloadPdf(req, res)
 );
 
+router.get(
+  '/:id/history',
+  (req, res) => certificateController.getCertificateHistory(req, res)
+);
+
 router.post(
   '/seasons/:seasonId/issue',
   requireRole('ADMIN', 'CSP_MEMBER', 'AGRI_PANCHAYAT'),
@@ -59,9 +64,27 @@ router.post(
 );
 
 router.post(
+  '/issue',
+  requireRole('ADMIN', 'CSP_MEMBER', 'AGRI_PANCHAYAT'),
+  (req, res) => certificateController.issueCertificate(req, res)
+);
+
+router.post(
   '/:id/reissue',
-  requireRole('ADMIN', 'AGRI_PANCHAYAT'),
+  requireRole('ADMIN'),
   (req, res) => certificateController.reissueCertificate(req, res)
+);
+
+router.post(
+  '/:id/regenerate',
+  requireRole('ADMIN'),
+  (req, res) => certificateController.regenerateCertificate(req, res)
+);
+
+router.post(
+  '/:id/seal',
+  requireRole('ADMIN'),
+  (req, res) => certificateController.sealCertificate(req, res)
 );
 
 router.post(

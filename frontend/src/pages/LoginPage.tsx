@@ -5,6 +5,7 @@ import { apiRequest } from '../api/client.js';
 import { Droplets, ShieldCheck, AlertCircle, KeyRound } from 'lucide-react';
 import { Button } from '../components/ui/Button.js';
 import { Input } from '../components/ui/Input.js';
+import { APP_NAME, APP_NAME_TE, APP_TAGLINE, ORG_NAME } from '../config/branding.js';
 
 export const LoginPage: React.FC = () => {
   const { login, refetchUser } = useAuth();
@@ -77,14 +78,17 @@ export const LoginPage: React.FC = () => {
         <div className="mx-auto w-16 h-16 rounded-2xl bg-forest-600 flex items-center justify-center text-white shadow-xl mb-4 border border-forest-400/30">
           <Droplets className="w-9 h-9" />
         </div>
-        <h2 className="text-3xl font-extrabold text-white tracking-tight">
-          జలమిత్ర <span className="text-forest-400 font-semibold text-2xl">Jalamitra</span>
+        <h2 className="text-2xl font-extrabold text-white tracking-tight">
+          {APP_NAME_TE}
         </h2>
+        <h3 className="text-xl font-bold text-forest-300 mt-0.5">
+          {APP_NAME}
+        </h3>
         <p className="mt-2 text-sm text-forest-200/80">
-          Voice Driven Intelligent Irrigation Management & Conservation
+          {APP_TAGLINE}
         </p>
         <p className="text-[11px] text-forest-300/60 uppercase tracking-widest mt-1">
-          B.Tech Community Service Project
+          {ORG_NAME}
         </p>
       </div>
 

@@ -7,7 +7,8 @@ import { createSeasonSchema, updateSeasonSchema, completeSeasonSchema } from './
 import { TelephonyService } from '../telephony/service.js';
 
 export async function listSeasons(req: Request, res: Response): Promise<void> {
-  const { farmer_id, status, crop_id, season_year } = req.query;
+  const farmer_id = req.query.farmer_id || req.query.farmerId;
+  const { status, crop_id, season_year } = req.query;
   const user = req.user;
   const scopedVillages = getScopedVillageFilter(user);
 
